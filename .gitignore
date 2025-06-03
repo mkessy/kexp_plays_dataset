@@ -13,3 +13,14 @@ wheels/
 data/
 normalized_kexp_jsonl/
 kexp_data.db
+
+# Environment variables
+.env
+
+# Analysis outputs
+comment_chunks_sample.jsonl
+chunk_evaluation_samples/
+chunk_evaluations/
+
+# Archive
+archive/

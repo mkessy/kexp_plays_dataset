@@ -9,7 +9,7 @@ adapted to match the actual database schema.
 
 import duckdb
 import sys
-from pathlib import Path
+# from pathlib import Path # Unused import
 
 
 def connect_to_database(db_path: str = "kexp_data.db") -> duckdb.DuckDBPyConnection:
@@ -132,6 +132,39 @@ def create_foundational_views(conn: duckdb.DuckDBPyConnection) -> None:
     print("✅ Foundational views created successfully!")
 
 
+def create_vss_artifacts(conn: duckdb.DuckDBPyConnection, embedding_dim: int = 768) -> None:
+    """Create table for VSS embeddings and an HNSW index."""
+    print("\n🏗️  Creating VSS artifacts...")
+
+    # Table for play comment embeddings
+    print(
+        f"Creating table play_comment_embeddings with embedding dimension {embedding_dim}...")
+    conn.execute(f"""
+        CREATE TABLE IF NOT EXISTS play_comment_embeddings (
+            play_id BIGINT PRIMARY KEY,
+            comment_embedding FLOAT[{embedding_dim}]
+        )
+    """)
+
+    # HNSW Index on comment_embedding
+    # NOTE: This assumes DuckDB has an HNSW index capability, possibly via an extension (e.g., vss).
+    # The exact syntax might vary based on the DuckDB version and installed extensions.
+    print("Creating HNSW index idx_hnsw_comment_embeddings on play_comment_embeddings(comment_embedding)...")
+    try:
+        conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS idx_hnsw_comment_embeddings
+            ON play_comment_embeddings
+            USING HNSW (comment_embedding)
+        """)
+        print("✅ HNSW index created (or already exists).")
+    except Exception as e:
+        print(f"⚠️ Could not create HNSW index. This might be expected if VSS extensions are not installed/configured.")
+        print(f"   Error: {e}")
+        print("   Please ensure your DuckDB setup supports HNSW indexing for vector types.")
+
+    print("✅ VSS artifacts setup complete.")
+
+
 def run_sample_metrics_queries(conn: duckdb.DuckDBPyConnection) -> None:
     """Run sample metrics queries to demonstrate the views."""
 
@@ -146,10 +179,13 @@ def run_sample_metrics_queries(conn: duckdb.DuckDBPyConnection) -> None:
             (SELECT COUNT(*) FROM dim_artists_master) AS total_unique_artists,
             (SELECT COUNT(*) FROM dim_shows) AS total_shows
     """).fetchone()
-    print(f"Total plays: {result[0]:,}")
-    print(f"Total unique tracks: {result[1]:,}")
-    print(f"Total unique artists: {result[2]:,}")
-    print(f"Total shows: {result[3]:,}")
+    if result:
+        print(f"Total plays: {result[0]:,}")
+        print(f"Total unique tracks: {result[1]:,}")
+        print(f"Total unique artists: {result[2]:,}")
+        print(f"Total shows: {result[3]:,}")
+    else:
+        print("Could not fetch overall data counts.")
 
     # Play Type Distribution
     print("\n🎵 Play Type Distribution:")
@@ -176,7 +212,11 @@ def run_sample_metrics_queries(conn: duckdb.DuckDBPyConnection) -> None:
             ROUND(SUM(CASE WHEN comment IS NOT NULL AND comment != '' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS percentage_with_comments
         FROM fact_plays
     """).fetchone()
-    print(f"Plays with comments: {result[0]:,} / {result[1]:,} ({result[2]}%)")
+    if result:
+        print(
+            f"Plays with comments: {result[0]:,} / {result[1]:,} ({result[2]}%)")
+    else:
+        print("Could not fetch comment analysis data.")
 
     # Comment length stats
     result = conn.execute("""
@@ -189,8 +229,11 @@ def run_sample_metrics_queries(conn: duckdb.DuckDBPyConnection) -> None:
         FROM fact_plays
         WHERE comment IS NOT NULL AND comment != ''
     """).fetchone()
-    print(
-        f"Comment length - Min: {result[0]}, Max: {result[1]}, Avg: {result[2]}, Median: {result[3]}, 95th %ile: {result[4]}")
+    if result:
+        print(
+            f"Comment length - Min: {result[0]}, Max: {result[1]}, Avg: {result[2]}, Median: {result[3]}, 95th %ile: {result[4]}")
+    else:
+        print("Could not fetch comment length stats.")
 
     # Top Most Played Tracks
     print("\n🎯 Top 10 Most Played Tracks:")
@@ -235,7 +278,10 @@ def run_data_quality_checks(conn: duckdb.DuckDBPyConnection) -> None:
         FROM fact_plays
         WHERE track_id_internal IS NULL
     """).fetchone()
-    print(f"Plays with NULL track_id_internal: {result[0]:,}")
+    if result:
+        print(f"Plays with NULL track_id_internal: {result[0]:,}")
+    else:
+        print("Could not fetch plays_with_null_track_id.")
 
     # Plays with NULL show_id
     result = conn.execute("""
@@ -243,7 +289,10 @@ def run_data_quality_checks(conn: duckdb.DuckDBPyConnection) -> None:
         FROM fact_plays
         WHERE show_id IS NULL
     """).fetchone()
-    print(f"Plays with NULL show_id: {result[0]:,}")
+    if result:
+        print(f"Plays with NULL show_id: {result[0]:,}")
+    else:
+        print("Could not fetch plays_with_null_show_id.")
 
     print("✅ Data quality checks completed!")
 
@@ -275,6 +324,9 @@ def main():
     try:
         # Create foundational views
         create_foundational_views(conn)
+
+        # Create VSS artifacts
+        create_vss_artifacts(conn, embedding_dim=768)
 
         # List created views
         list_created_views(conn)
