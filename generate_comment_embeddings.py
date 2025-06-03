@@ -14,6 +14,7 @@ import time
 import pandas as pd  # For fetching data in chunks easily
 from dotenv import load_dotenv
 from mlx_embeddings.utils import load as load_mlx_model
+import argparse
 
 # --- Configuration ---
 load_dotenv()  # Load variables from .env file
@@ -22,7 +23,7 @@ DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
 MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME",
                        "mlx-community/nomicai-modernbert-embed-base-4bit")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", 768))
-BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 64))
+BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 256))
 CHUNK_EMBEDDING_TABLE_NAME = os.getenv(
     "CHUNK_EMBEDDING_TABLE_NAME", "chunk_embeddings")
 CONSERVATIVE_STRATEGY_ID = 3  # As determined by analysis
@@ -36,8 +37,7 @@ SQL_CREATE_CHUNK_EMBEDDINGS_TABLE = f"""
 CREATE TABLE IF NOT EXISTS {CHUNK_EMBEDDING_TABLE_NAME} (
     chunk_id INTEGER PRIMARY KEY,
     embedding FLOAT[{EMBEDDING_DIM}] NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (chunk_id) REFERENCES comment_chunks_raw(chunk_id)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -72,6 +72,12 @@ def connect_db(db_path: str) -> duckdb.DuckDBPyConnection:
     try:
         conn = duckdb.connect(db_path)
         print(f"✅ Connected to database: {db_path}")
+
+        # Ensure unique index on chunk_id for foreign key constraint
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_comment_chunks_raw_chunk_id ON comment_chunks_raw(chunk_id);
+        """)
+        print(f"✅ Ensured unique index on comment_chunks_raw(chunk_id) exists.")
 
         # Create table and view if they don't exist
         conn.execute(SQL_CREATE_CHUNK_EMBEDDINGS_TABLE)
@@ -167,33 +173,31 @@ def count_total_pending_chunks(conn: duckdb.DuckDBPyConnection) -> int:
 
 
 def generate_embeddings_batch(model, tokenizer, texts: list[str]) -> list[list[float]]:
-    """Generate embeddings for a batch of texts."""
+    """Generate embeddings for a batch of texts using MLX model and tokenizer."""
     if not texts:
         return []
     try:
-        # The mlx-embeddings `model.embed()` is expected to handle tokenization internally if tokenizer is part of the loaded model object,
-        # or one might pass tokenized input. The example for text embeddings: `embeddings = model.embed(texts)`
-        # For batch processing:
-        # inputs = tokenizer.batch_encode_plus(texts, return_tensors="mlx", padding=True, truncation=True, max_length=512)
-        # embeddings_mx = model(**inputs).pooler_output
-        # The `mlx-embeddings` library's `model.embed(texts)` simplifies this.
-        embeddings_mx = model.embed(texts)  # This should return MLX arrays
-
-        # Ensure embeddings are on CPU and convert to Python lists
+        # Tokenize the batch
+        inputs = tokenizer.batch_encode_plus(
+            texts,
+            return_tensors="mlx",
+            padding=True,
+            truncation=True,
+            max_length=256
+        )
+        # Forward pass
+        outputs = model(**inputs)
+        # Get mean pooled, normalized embeddings
+        embeddings_mx = outputs.text_embeds
+        # Convert to Python lists
         embeddings_list = [emb.tolist() for emb in embeddings_mx]
-
-        # Validate dimension of first embedding as a sanity check
         if embeddings_list and len(embeddings_list[0]) != EMBEDDING_DIM:
             print(
                 f"❌ Critical Error: Embedding dimension mismatch! Expected {EMBEDDING_DIM}, got {len(embeddings_list[0])}.")
-            print(
-                f"   This will cause failure on insertion. Check your model and EMBEDDING_DIM setting.")
             sys.exit(1)
-
         return embeddings_list
     except Exception as e:
         print(f"❌ Error during embedding generation: {e}")
-        # Return empty list or re-raise, depending on desired error handling for a batch
         return []
 
 
@@ -214,8 +218,91 @@ def insert_chunk_embeddings_to_db(conn: duckdb.DuckDBPyConnection, chunk_ids: li
         return 0
 
 
+def prewarm_mlx(model, tokenizer):
+    dummy = ["Prewarm embedding run."]
+    inputs = tokenizer.batch_encode_plus(
+        dummy,
+        return_tensors="mlx",
+        padding=True,
+        truncation=True,
+        max_length=256
+    )
+    _ = model(**inputs)
+    print("✅ MLX kernels prewarmed.")
+
+
+def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
+    # Fetch a large pool to allow bucketing
+    pool_size = desired_batch * 4
+    rows = conn.execute(f"""
+        SELECT chunk_id, chunk_text
+        FROM comment_chunks_raw
+        WHERE strategy_id = {CONSERVATIVE_STRATEGY_ID}
+          AND chunk_length >= {MIN_CHUNK_LENGTH}
+          AND NOT is_url_only
+          AND alpha_ratio >= {MIN_ALPHA_RATIO}
+          AND alphanum_ratio >= {MIN_ALPHANUM_RATIO}
+          AND chunk_id NOT IN (SELECT chunk_id FROM {CHUNK_EMBEDDING_TABLE_NAME})
+        ORDER BY chunk_id
+        LIMIT {pool_size}
+    """).fetchdf()
+    if rows.empty:
+        return rows  # Empty DataFrame
+
+    # Tokenize to get token counts
+    token_counts = [
+        len(tokenizer.encode(text, truncation=True, max_length=512))
+        for text in rows['chunk_text']
+    ]
+    rows['token_count'] = token_counts
+
+    # Buckets
+    buckets = {
+        'A': [],  # ≤ 64 tokens
+        'B': [],  # 65–128
+        'C': [],  # 129–256
+        'D': []   # >256
+    }
+    for idx, row in rows.iterrows():
+        L = row['token_count']
+        if L <= 64:
+            buckets['A'].append(row)
+        elif 65 <= L <= 128:
+            buckets['B'].append(row)
+        elif 129 <= L <= 256:
+            buckets['C'].append(row)
+        else:
+            buckets['D'].append(row)
+
+    # Priority: A (512), B (256), C (128), D (64)
+    bucket_order = [
+        ('A', 512),
+        ('B', 256),
+        ('C', 128),
+        ('D', 64)
+    ]
+    for bucket_name, max_batch in bucket_order:
+        bucket = buckets[bucket_name]
+        if len(bucket) >= max_batch:
+            selected = bucket[:max_batch]
+            return pd.DataFrame(selected)
+    # If no bucket has enough, return the largest available bucket (if any)
+    for bucket_name, _ in bucket_order:
+        bucket = buckets[bucket_name]
+        if len(bucket) > 0:
+            return pd.DataFrame(bucket)
+    # Fallback: return empty
+    return pd.DataFrame([])
+
+
 def main():
     """Main script execution."""
+    parser = argparse.ArgumentParser(
+        description="Generate embeddings for KEXP comment chunks.")
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Drop and recreate the chunk_embeddings table before embedding generation.')
+    args = parser.parse_args()
+
     print("🚀 Starting KEXP Comment Chunk Embedding Generation...")
     print(f"   Database: {DB_PATH}")
     print(f"   Model: {MODEL_NAME}")
@@ -227,7 +314,19 @@ def main():
         f"   Quality Filters: Min Length={MIN_CHUNK_LENGTH}, Min Alpha={MIN_ALPHA_RATIO}, Min Alphanum={MIN_ALPHANUM_RATIO}, Not URL-only")
 
     conn = connect_db(DB_PATH)
+
+    if args.overwrite:
+        print(
+            f"⚠️  Overwrite mode enabled: Dropping and recreating table '{CHUNK_EMBEDDING_TABLE_NAME}'.")
+        conn.execute(f"DROP TABLE IF EXISTS {CHUNK_EMBEDDING_TABLE_NAME};")
+        conn.execute(SQL_CREATE_CHUNK_EMBEDDINGS_TABLE)
+        print(f"✅ Table '{CHUNK_EMBEDDING_TABLE_NAME}' recreated.")
+        # Also recreate the view
+        conn.execute(SQL_CREATE_CHUNK_EMBEDDINGS_VIEW)
+        print(f"✅ View 'chunk_embeddings_with_metadata' recreated.")
+
     model, tokenizer = load_embedding_model(MODEL_NAME)
+    prewarm_mlx(model, tokenizer)
 
     total_pending_initial = count_total_pending_chunks(conn)
     if total_pending_initial == 0:
@@ -238,41 +337,28 @@ def main():
     print(f"Total chunks to process: {total_pending_initial:,}")
 
     processed_count_session = 0
-    # offset = 0 # Offset is not incremented; new batches are fetched based on what's not in the table
     start_time_session = time.time()
 
     while True:
-        # Always fetch from offset 0 as the query filters out already processed chunks
-        batch_df = fetch_chunks_for_embedding(conn, BATCH_SIZE, offset=0)
-
+        batch_df = fetch_and_bucket_chunks(conn, tokenizer, BATCH_SIZE)
         if batch_df.empty:
             print("✅ No more chunks to process in this run.")
             break
-
         chunk_ids_batch = batch_df['chunk_id'].tolist()
         chunk_texts_batch = batch_df['chunk_text'].tolist()
-
-        if not chunk_texts_batch:
-            print("❓ Fetched an empty text batch, ending.")
-            break
-
         print(f"   Processing batch of {len(chunk_texts_batch)} chunks...")
-
         batch_start_time = time.time()
         embeddings_batch = generate_embeddings_batch(
             model, tokenizer, chunk_texts_batch)
         batch_end_time = time.time()
-
         if not embeddings_batch or len(embeddings_batch) != len(chunk_ids_batch):
             print(
                 f"⚠️ Skipping batch due to embedding generation error or count mismatch.")
             if not batch_df.empty:
                 print(f"Failed to process chunk_ids: {chunk_ids_batch[:5]}")
             continue
-
         inserted_count = insert_chunk_embeddings_to_db(
             conn, chunk_ids_batch, embeddings_batch)
-
         if inserted_count > 0:
             processed_count_session += inserted_count
             total_pending_now = count_total_pending_chunks(conn)
@@ -286,19 +372,16 @@ def main():
                 f"⚠️ Failed to insert embeddings for the current batch of {len(chunk_ids_batch)} items.")
             print(
                 f"   Problematic chunk_ids (first 5 of this batch): {chunk_ids_batch[:5]}")
-
     session_duration = time.time() - start_time_session
     print(f"\n🎉 Chunk embedding generation complete for this session.")
     print(
         f"   Processed {processed_count_session:,} chunks in {session_duration:.2f} seconds.")
-
     final_pending_count = count_total_pending_chunks(conn)
     if final_pending_count == 0:
         print("✅ All eligible chunks have been successfully embedded.")
     else:
         print(
             f"⚠️ {final_pending_count:,} chunks still pending (possibly due to errors during processing).")
-
     conn.close()
     print("🔐 Database connection closed.")
 
