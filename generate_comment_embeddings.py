@@ -397,6 +397,25 @@ def main():
 
     conn = connect_db(DB_PATH)
 
+    # --- VSS Extension and HNSW Index Setup ---
+    try:
+        print("\n🔌 Loading DuckDB VSS extension and enabling HNSW persistence...")
+        conn.execute("INSTALL 'vss';")
+        conn.execute("LOAD 'vss';")
+        conn.execute("SET hnsw_enable_experimental_persistence=true;")
+        print("✅ VSS extension loaded and HNSW persistence enabled.")
+        print(
+            f"Creating persistent HNSW index on {CHUNK_EMBEDDING_TABLE_NAME}(embedding)...")
+        conn.execute(f"""
+            CREATE INDEX IF NOT EXISTS idx_hnsw_chunk_embeddings
+            ON {CHUNK_EMBEDDING_TABLE_NAME}
+            USING HNSW (embedding)
+        """)
+        print("✅ HNSW index created (or already exists) and is persistent.")
+    except Exception as e:
+        print(f"⚠️ Could not set up VSS extension or HNSW index: {e}")
+        print("   Please ensure your DuckDB setup supports the VSS extension and HNSW persistence.")
+
     # Determine export path with timestamp if not specified
     export_path = args.export_path
     if (args.export_unembedded_chunks or args.export_all_chunks) and args.export_path == parser.get_default('export_path'):
