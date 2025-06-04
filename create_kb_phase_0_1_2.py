@@ -249,6 +249,37 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
         conn.execute(stmt)
     print("✅ KB tables created.")
 
+
+def ingest_worldcities_to_kb_location(conn: duckdb.DuckDBPyConnection, csv_path: str):
+    print(f"\n🌍 Ingesting world cities from {csv_path} into kb_Location...")
+    # Read CSV into DuckDB temp table
+    conn.execute(f"""
+        CREATE OR REPLACE TEMP TABLE tmp_worldcities AS
+        SELECT * FROM read_csv_auto('{csv_path}', HEADER=TRUE)
+    """)
+    # Insert into kb_Location, generating UUIDs, upsert on unique constraint
+    insert_sql = """
+        INSERT INTO kb_Location (kb_id, city, state_or_region, country, latitude, longitude, created_at, updated_at)
+        SELECT
+            uuid(),
+            city,
+            admin_name AS state_or_region,
+            country,
+            CAST(lat AS DOUBLE),
+            CAST(lng AS DOUBLE),
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        FROM tmp_worldcities
+        ON CONFLICT (city, state_or_region, country) DO NOTHING
+    """
+    conn.execute(insert_sql)
+    # Count how many were inserted
+    row = conn.execute("SELECT COUNT(*) FROM kb_Location").fetchone()
+    count = row[0] if row else 0
+    print(f"✅ kb_Location now has {count:,} rows.")
+    # Drop temp table
+    conn.execute("DROP TABLE IF EXISTS tmp_worldcities")
+
 # --- MAIN ---
 
 
@@ -259,6 +290,8 @@ def main():
     try:
         create_enum_types(conn)
         create_kb_tables(conn)
+        ingest_worldcities_to_kb_location(
+            conn, "data/kb_dumps/worldcities.csv")
     finally:
         conn.close()
         print("\n🔐 Database connection closed.")

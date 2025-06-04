@@ -484,3 +484,6 @@ This phase populates entities and relationships primarily based on information e
 - **Iteration:** This will be iterative. Your DSPy models will improve, and you'll re-process comments to extract more or better information.
 
 This detailed population strategy should give you a clear path forward. Start with the structured data; it will provide a strong skeleton for the knowledge graph you enrich with the comment data.
+
+**Phase 3: Unstructured Data, Inspiration, Sound Discussion, Theme, Emotion, Mood, etc.**
+

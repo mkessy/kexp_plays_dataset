@@ -114,7 +114,12 @@ def connect_db(db_path: str) -> duckdb.DuckDBPyConnection:
 def get_already_embedded_chunk_ids(conn: duckdb.DuckDBPyConnection) -> set[int]:
     """Fetch all chunk_ids that are already in the embeddings table."""
     try:
-        return set(row[0] for row in conn.execute(f"SELECT chunk_id FROM {CHUNK_EMBEDDING_TABLE_NAME}").fetchall())
+        result = conn.execute(
+            f"SELECT chunk_id FROM {CHUNK_EMBEDDING_TABLE_NAME}").fetchall()
+        ids = set(row[0] for row in result)
+        print(
+            f"ℹ️ Found {len(ids):,} already embedded chunk IDs in '{CHUNK_EMBEDDING_TABLE_NAME}'.")
+        return ids
     except Exception as e:
         print(
             f"⚠️ Warning: Could not fetch existing embedded chunk IDs from {CHUNK_EMBEDDING_TABLE_NAME}. Assuming none exist. Error: {e}")
@@ -178,6 +183,7 @@ def generate_embeddings_batch(model, tokenizer, texts: list[str]) -> list[list[f
     """Generate embeddings for a batch of texts using MLX model and tokenizer."""
     if not texts:
         return []
+    print(f"      ↪ Generating embeddings for {len(texts)} texts...")
     try:
         # Tokenize the batch
         inputs = tokenizer.batch_encode_plus(
@@ -236,6 +242,8 @@ def prewarm_mlx(model, tokenizer):
 def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
     # Fetch a large pool to allow bucketing
     pool_size = desired_batch * 4
+    print(
+        f"   DB fetch: Attempting to fetch up to {pool_size} chunks for bucketing...")
     rows = conn.execute(f"""
         SELECT chunk_id, chunk_text
         FROM comment_chunks_raw
@@ -249,7 +257,9 @@ def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
         LIMIT {pool_size}
     """).fetchdf()
     if rows.empty:
+        print("   DB fetch: No chunks found to fetch for bucketing.")
         return rows  # Empty DataFrame
+    print(f"   DB fetch: Fetched {len(rows)} chunks for bucketing.")
 
     # Tokenize to get token counts
     token_counts = [
@@ -276,6 +286,9 @@ def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
         else:
             buckets['D'].append(row)
 
+    print(
+        f"   Bucketing: Counts - A (≤64): {len(buckets['A'])}, B (65–128): {len(buckets['B'])}, C (129–256): {len(buckets['C'])}, D (>256): {len(buckets['D'])}")
+
     # Priority: A (512), B (256), C (128), D (64)
     bucket_order = [
         ('A', 512),
@@ -287,18 +300,24 @@ def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
         bucket = buckets[bucket_name]
         if len(bucket) >= max_batch:
             selected = bucket[:max_batch]
+            print(
+                f"   Bucketing: Selected bucket {bucket_name} with {len(selected)} chunks (meets max_batch {max_batch}).")
             return pd.DataFrame(selected)
     # If no bucket has enough, return the largest available bucket (if any)
     for bucket_name, _ in bucket_order:
         bucket = buckets[bucket_name]
         if len(bucket) > 0:
+            print(
+                f"   Bucketing: Selected largest available bucket {bucket_name} with {len(bucket)} chunks.")
             return pd.DataFrame(bucket)
     # Fallback: return empty
+    print("   Bucketing: No suitable chunks found in buckets to form a batch.")
     return pd.DataFrame([])
 
 
 def export_unembedded_chunks(conn, export_path):
     """Export all unembedded, quality-filtered, conservative-strategy chunks to JSONL."""
+    print(f"⏳ Starting export of unembedded chunks to {export_path}...")
     query = f"""
         SELECT chunk_id, play_id, chunk_index, chunk_text, normalized_chunk_text, chunk_length, alpha_ratio, alphanum_ratio
         FROM comment_chunks_raw
@@ -318,22 +337,74 @@ def export_unembedded_chunks(conn, export_path):
 
 
 def export_all_chunks(conn, export_path):
-    """Export all quality-filtered, conservative-strategy chunks to JSONL (regardless of embedding status)."""
-    query = f"""
-        SELECT chunk_id, play_id, chunk_index, chunk_text, normalized_chunk_text, chunk_length, alpha_ratio, alphanum_ratio
-        FROM comment_chunks_raw
-        WHERE strategy_id = {CONSERVATIVE_STRATEGY_ID}
-          AND chunk_length >= {MIN_CHUNK_LENGTH}
-          AND NOT is_url_only
-          AND alpha_ratio >= {MIN_ALPHA_RATIO}
-          AND alphanum_ratio >= {MIN_ALPHANUM_RATIO}
-        ORDER BY chunk_id
+    """Export data using a specific user-defined query and DuckDB's COPY command for efficiency."""
+    print(
+        f"⏳ Starting export of custom query results to {export_path} using DuckDB COPY command...")
+
+    # User's specified query, with Python variables interpolated
+    # Global constants: CHUNK_EMBEDDING_TABLE_NAME, CONSERVATIVE_STRATEGY_ID
+    the_query = f"""
+    SELECT
+        c.chunk_id,
+        c.chunk_text,
+        c.normalized_chunk_text,
+        c.chunk_length,
+        c.alpha_ratio,
+        c.alphanum_ratio,
+        c.is_url_only,
+        c.contains_url,
+        c.play_id,
+        fp.original_artist_text,
+        fp.original_song_text,
+        fp.original_album_text,
+        fp.airdate_iso,
+        ce.embedding
+    FROM comment_chunks_raw c
+    JOIN fact_plays fp ON c.play_id = fp.play_id
+    JOIN {CHUNK_EMBEDDING_TABLE_NAME} ce ON c.chunk_id = ce.chunk_id
+    WHERE c.strategy_id = {CONSERVATIVE_STRATEGY_ID}
+      AND c.chunk_length BETWEEN 30 AND 800
+      AND NOT c.is_url_only
+      AND c.alpha_ratio >= 0.4
+      AND c.alphanum_ratio >= 0.6
+    ORDER BY RANDOM()
     """
-    df = conn.execute(query).fetchdf()
-    count = len(df)
-    df.to_json(export_path, orient='records', lines=True, force_ascii=False)
-    print(f"✅ Exported {count:,} quality-filtered chunks to {export_path}")
-    return count
+
+    # Escape single quotes in export_path for SQL literal
+    # This is a basic safety measure. For complex paths, more robust quoting might be needed.
+    safe_export_path = export_path.replace("'", "''")
+
+    # DuckDB COPY command. FORMAT JSON for a query defaults to newline-delimited (JSONL).
+    copy_command_sql = f"COPY ({the_query}) TO '{safe_export_path}' (FORMAT JSON);"
+
+    exported_count = 0
+    try:
+        # Optional: conn.execute("SET preserve_insertion_order = false;")
+        # This setting is for queries WITHOUT an ORDER BY. The current query has ORDER BY RANDOM(),
+        # so preserve_insertion_order's effect is uncertain but likely minimal here.
+
+        print(
+            f"   Executing COPY command to {safe_export_path}. This may take a while for large datasets...")
+        conn.execute(copy_command_sql)
+        print(f"✅ COPY command completed for export to {export_path}.")
+
+        # Get the count of exported rows by re-using the_query in a COUNT aggregation
+        count_query = f"SELECT COUNT(*) FROM ({the_query}) AS subquery_for_count;"
+        print("   Querying for exported row count...")
+        count_result = conn.execute(count_query).fetchone()
+        if count_result:
+            exported_count = count_result[0]
+        print(
+            f"✅ Successfully exported {exported_count:,} records using COPY command.")
+        print("   Note: Detailed per-N-chunk progress logging is not available with this method.")
+
+    except Exception as e:
+        print(f"❌ Error during COPY export: {e}")
+        # Optionally, log the full command if it's not too sensitive / long:
+        # print(f"   Failed COPY command (first 300 chars): {copy_command_sql[:300]}...")
+        return 0  # Indicate failure
+
+    return exported_count
 
 
 def import_embeddings(conn, import_path, batch_size=1000):
@@ -341,6 +412,9 @@ def import_embeddings(conn, import_path, batch_size=1000):
     if not os.path.exists(import_path):
         print(f"❌ Import file not found: {import_path}")
         return
+
+    print(
+        f"⏳ Starting import of embeddings from {import_path} into {CHUNK_EMBEDDING_TABLE_NAME}...")
     # Ensure table exists
     conn.execute(SQL_CREATE_CHUNK_EMBEDDINGS_TABLE)
     count = 0
@@ -421,7 +495,7 @@ def main():
     if (args.export_unembedded_chunks or args.export_all_chunks) and args.export_path == parser.get_default('export_path'):
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         if args.export_all_chunks:
-            export_path = f'comment_chunks_for_embedding_all_{timestamp}.jsonl'
+            export_path = f'comment_chunks_all_quality_filtered_{timestamp}.jsonl'
         else:
             export_path = f'comment_chunks_for_embedding_{timestamp}.jsonl'
 
