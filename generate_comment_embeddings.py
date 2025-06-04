@@ -15,15 +15,17 @@ import pandas as pd  # For fetching data in chunks easily
 from dotenv import load_dotenv
 from mlx_embeddings.utils import load as load_mlx_model
 import argparse
+import datetime
+import json
 
 # --- Configuration ---
 load_dotenv()  # Load variables from .env file
 
 DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
 MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME",
-                       "mlx-community/nomicai-modernbert-embed-base-4bit")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", 768))
-BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 256))
+                       "mlx-community/all-MiniLM-L6-v2-4bit")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIMENSION", 384))
+BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", 64))
 CHUNK_EMBEDDING_TABLE_NAME = os.getenv(
     "CHUNK_EMBEDDING_TABLE_NAME", "chunk_embeddings")
 CONSERVATIVE_STRATEGY_ID = 3  # As determined by analysis
@@ -295,12 +297,92 @@ def fetch_and_bucket_chunks(conn, tokenizer, desired_batch):
     return pd.DataFrame([])
 
 
+def export_unembedded_chunks(conn, export_path):
+    """Export all unembedded, quality-filtered, conservative-strategy chunks to JSONL."""
+    query = f"""
+        SELECT chunk_id, play_id, chunk_index, chunk_text, normalized_chunk_text, chunk_length, alpha_ratio, alphanum_ratio
+        FROM comment_chunks_raw
+        WHERE strategy_id = {CONSERVATIVE_STRATEGY_ID}
+          AND chunk_length >= {MIN_CHUNK_LENGTH}
+          AND NOT is_url_only
+          AND alpha_ratio >= {MIN_ALPHA_RATIO}
+          AND alphanum_ratio >= {MIN_ALPHANUM_RATIO}
+          AND chunk_id NOT IN (SELECT chunk_id FROM {CHUNK_EMBEDDING_TABLE_NAME})
+        ORDER BY chunk_id
+    """
+    df = conn.execute(query).fetchdf()
+    count = len(df)
+    df.to_json(export_path, orient='records', lines=True, force_ascii=False)
+    print(f"✅ Exported {count:,} unembedded chunks to {export_path}")
+    return count
+
+
+def export_all_chunks(conn, export_path):
+    """Export all quality-filtered, conservative-strategy chunks to JSONL (regardless of embedding status)."""
+    query = f"""
+        SELECT chunk_id, play_id, chunk_index, chunk_text, normalized_chunk_text, chunk_length, alpha_ratio, alphanum_ratio
+        FROM comment_chunks_raw
+        WHERE strategy_id = {CONSERVATIVE_STRATEGY_ID}
+          AND chunk_length >= {MIN_CHUNK_LENGTH}
+          AND NOT is_url_only
+          AND alpha_ratio >= {MIN_ALPHA_RATIO}
+          AND alphanum_ratio >= {MIN_ALPHANUM_RATIO}
+        ORDER BY chunk_id
+    """
+    df = conn.execute(query).fetchdf()
+    count = len(df)
+    df.to_json(export_path, orient='records', lines=True, force_ascii=False)
+    print(f"✅ Exported {count:,} quality-filtered chunks to {export_path}")
+    return count
+
+
+def import_embeddings(conn, import_path, batch_size=1000):
+    """Import chunk embeddings from a JSONL file (with chunk_id and embedding fields) into the chunk_embeddings table."""
+    if not os.path.exists(import_path):
+        print(f"❌ Import file not found: {import_path}")
+        return
+    # Ensure table exists
+    conn.execute(SQL_CREATE_CHUNK_EMBEDDINGS_TABLE)
+    count = 0
+    batch = []
+    with open(import_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            obj = json.loads(line)
+            chunk_id = obj['chunk_id']
+            embedding = obj['embedding']
+            batch.append((chunk_id, embedding))
+            if len(batch) >= batch_size:
+                conn.executemany(
+                    f"INSERT OR REPLACE INTO {CHUNK_EMBEDDING_TABLE_NAME} (chunk_id, embedding) VALUES (?, ?)", batch)
+                count += len(batch)
+                batch = []
+                print(
+                    f"✅ Inserted {count:,} embeddings from {import_path} into {CHUNK_EMBEDDING_TABLE_NAME}")
+        if batch:
+            conn.executemany(
+                f"INSERT OR REPLACE INTO {CHUNK_EMBEDDING_TABLE_NAME} (chunk_id, embedding) VALUES (?, ?)", batch)
+            count += len(batch)
+    print(
+        f"✅ Imported {count:,} embeddings from {import_path} into {CHUNK_EMBEDDING_TABLE_NAME}")
+    return count
+
+
 def main():
     """Main script execution."""
     parser = argparse.ArgumentParser(
         description="Generate embeddings for KEXP comment chunks.")
     parser.add_argument('--overwrite', action='store_true',
                         help='Drop and recreate the chunk_embeddings table before embedding generation.')
+    parser.add_argument('--export-unembedded-chunks', action='store_true',
+                        help='Export all unembedded, quality-filtered, conservative-strategy chunks to JSONL and exit.')
+    parser.add_argument('--export-path', type=str, default='comment_chunks_for_embedding.jsonl',
+                        help='Path to export JSONL file (used with --export-unembedded-chunks).')
+    parser.add_argument('--no-fetch-bucketing', action='store_true',
+                        help='Disable bucketing logic and use simple sequential batch fetch for embedding.')
+    parser.add_argument('--export-all-chunks', action='store_true',
+                        help='Export all quality-filtered, conservative-strategy chunks to JSONL and exit (ignores embedding status).')
+    parser.add_argument('--import-embeddings', type=str, default=None,
+                        help='Path to a JSONL file containing chunk_id and embedding fields to import into the chunk_embeddings table.')
     args = parser.parse_args()
 
     print("🚀 Starting KEXP Comment Chunk Embedding Generation...")
@@ -314,6 +396,30 @@ def main():
         f"   Quality Filters: Min Length={MIN_CHUNK_LENGTH}, Min Alpha={MIN_ALPHA_RATIO}, Min Alphanum={MIN_ALPHANUM_RATIO}, Not URL-only")
 
     conn = connect_db(DB_PATH)
+
+    # Determine export path with timestamp if not specified
+    export_path = args.export_path
+    if (args.export_unembedded_chunks or args.export_all_chunks) and args.export_path == parser.get_default('export_path'):
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        if args.export_all_chunks:
+            export_path = f'comment_chunks_for_embedding_all_{timestamp}.jsonl'
+        else:
+            export_path = f'comment_chunks_for_embedding_{timestamp}.jsonl'
+
+    if args.export_all_chunks:
+        export_all_chunks(conn, export_path)
+        conn.close()
+        return
+
+    if args.export_unembedded_chunks:
+        export_unembedded_chunks(conn, export_path)
+        conn.close()
+        return
+
+    if args.import_embeddings:
+        import_embeddings(conn, args.import_embeddings)
+        conn.close()
+        return
 
     if args.overwrite:
         print(
@@ -340,7 +446,10 @@ def main():
     start_time_session = time.time()
 
     while True:
-        batch_df = fetch_and_bucket_chunks(conn, tokenizer, BATCH_SIZE)
+        if args.no_fetch_bucketing:
+            batch_df = fetch_chunks_for_embedding(conn, BATCH_SIZE, 0)
+        else:
+            batch_df = fetch_and_bucket_chunks(conn, tokenizer, BATCH_SIZE)
         if batch_df.empty:
             print("✅ No more chunks to process in this run.")
             break
