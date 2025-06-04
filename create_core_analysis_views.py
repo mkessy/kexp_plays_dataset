@@ -132,39 +132,6 @@ def create_foundational_views(conn: duckdb.DuckDBPyConnection) -> None:
     print("✅ Foundational views created successfully!")
 
 
-def create_vss_artifacts(conn: duckdb.DuckDBPyConnection, embedding_dim: int = 768) -> None:
-    """Create table for VSS embeddings and an HNSW index."""
-    print("\n🏗️  Creating VSS artifacts...")
-
-    # Table for play comment embeddings
-    print(
-        f"Creating table play_comment_embeddings with embedding dimension {embedding_dim}...")
-    conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS play_comment_embeddings (
-            play_id BIGINT PRIMARY KEY,
-            comment_embedding FLOAT[{embedding_dim}]
-        )
-    """)
-
-    # HNSW Index on comment_embedding
-    # NOTE: This assumes DuckDB has an HNSW index capability, possibly via an extension (e.g., vss).
-    # The exact syntax might vary based on the DuckDB version and installed extensions.
-    print("Creating HNSW index idx_hnsw_comment_embeddings on play_comment_embeddings(comment_embedding)...")
-    try:
-        conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS idx_hnsw_comment_embeddings
-            ON play_comment_embeddings
-            USING HNSW (comment_embedding)
-        """)
-        print("✅ HNSW index created (or already exists).")
-    except Exception as e:
-        print(f"⚠️ Could not create HNSW index. This might be expected if VSS extensions are not installed/configured.")
-        print(f"   Error: {e}")
-        print("   Please ensure your DuckDB setup supports HNSW indexing for vector types.")
-
-    print("✅ VSS artifacts setup complete.")
-
-
 def run_sample_metrics_queries(conn: duckdb.DuckDBPyConnection) -> None:
     """Run sample metrics queries to demonstrate the views."""
 
