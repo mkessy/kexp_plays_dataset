@@ -1,137 +1,97 @@
 # KEXP Data Scripts
 
-A data pipeline for downloading, processing, and analyzing KEXP radio station data, with a focus on DJ comment analysis and embedding generation.
+A collection of scripts for processing, analyzing, and extracting insights from KEXP DJ comments and music metadata.
 
 ## Overview
 
-This project provides tools to:
+This project includes tools for:
+1. Downloading and normalizing KEXP data
+2. Generating embeddings for comment chunks
+3. Topic modeling of DJ comments using BERTopic
+4. Creating knowledge graph structures from extracted insights
 
-1. Download KEXP data via their public API
-2. Normalize the data into a dimensional model in DuckDB
-3. Split DJ comments into meaningful chunks for analysis
-4. Generate embeddings for semantic search and analysis
+## Key Components
 
-## Project Structure
+### Data Processing
+- `download.py` - Download KEXP play data
+- `normalize_kexp.py` - Normalize and preprocess KEXP data
+- `ingest_kexp_data.py` - Import data into database
 
-```
-kexp_data_scripts/
-├── Core Scripts
-│   ├── download.py                    # Downloads KEXP data from API
-│   ├── ingest_kexp_data.py           # Ingests raw data into DuckDB
-│   ├── normalize_kexp.py             # Normalizes data into dimensional model
-│   ├── create_core_analysis_views.py # Creates analysis views
-│   ├── create_comment_chunks_analysis.py # Implements comment chunking strategies
-│   └── generate_comment_embeddings.py    # Generates embeddings (needs update)
-│
-├── Data
-│   ├── kexp_data.db                  # DuckDB database (2.4GB)
-│   ├── data/                         # Raw downloaded data
-│   └── normalized_kexp_jsonl/        # Normalized data exports
-│
-├── Documentation
-│   ├── COMMENT_CHUNKING_PROGRESS.md  # Chunking implementation progress
-│   └── CORE_ANALYSIS_IMPLEMENTATION.md # Core analysis documentation
-│
-└── Archive/                          # Evaluation scripts and temporary files
-```
+### Text Analysis
+- `generate_comment_embeddings.py` - Create embeddings for DJ comments
+- `create_comment_chunks_analysis.py` - Analyze and chunk DJ comments
+- `cluster_comments.py` - Topic modeling with BERTopic
+- `rate_topics.py` - Interactive CLI for evaluating topic quality
 
-## Setup
+### Knowledge Base
+- `create_kb_phase_0_1_2.py` - Setup knowledge graph schema
+- `create_core_analysis_views.py` - Create analysis views
 
-1. Create a Python virtual environment:
+## Topic Modeling
 
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On macOS/Linux
-   ```
+The `cluster_comments.py` script implements topic modeling for KEXP DJ comments using BERTopic. Key features include:
 
-2. Install dependencies:
+- Pre-computed embeddings loaded from DuckDB
+- Comprehensive text cleaning (URLs, emails, phone numbers)
+- De-duplication of comment chunks
+- Extensive stop word lists (English, Spanish, domain-specific)
+- Hyperparameter tuning for optimal topic discovery
+- MMR (Maximal Marginal Relevance) for diverse topic keywords
+- Multiple outlier reduction strategies
+- Topic coherence evaluation
 
-   ```bash
-   pip install -r requirements.txt  # or use uv/poetry
-   ```
-
-3. Create `.env` file with configuration:
-
-   ```bash
-   # Database
-   DB_PATH=kexp_data.db
-
-   # Embedding model (for Apple Silicon Macs)
-   EMBEDDING_MODEL_NAME=mlx-community/nomicai-modernbert-embed-base-4bit
-   EMBEDDING_DIMENSION=768
-   EMBEDDING_BATCH_SIZE=64
-   EMBEDDING_TABLE_NAME=play_comment_embeddings
-
-   # OpenAI (optional, for evaluation)
-   OPENAI_API_KEY=your-key-here
-   ```
-
-## Usage
-
-### 1. Download KEXP Data
+### Usage
 
 ```bash
-python download.py --start-date 2024-01-01 --end-date 2024-12-31
+# Basic usage with default parameters
+python cluster_comments.py
+
+# Run with hyperparameter optimization
+python cluster_comments.py --optimize
+
+# Process all documents with random sampling
+python cluster_comments.py --limit 0 --sample
+
+# Use a predefined configuration
+python cluster_comments.py --config conservative
 ```
 
-### 2. Ingest and Normalize Data
+### Configuration Options
+
+- `--limit`: Number of documents to process (0 for all)
+- `--sample`: Use random sampling instead of sequential
+- `--optimize`: Run hyperparameter optimization
+- `--config`: Predefined configuration to use:
+  - `granular`: More specific topics (higher count)
+  - `balanced`: Balanced approach (default)
+  - `conservative`: Fewer, more general topics with higher coherence
+
+### Topic Evaluation
+
+Use the `rate_topics.py` script to manually evaluate topic quality:
 
 ```bash
-python ingest_kexp_data.py
-python normalize_kexp.py
+python rate_topics.py --topic-file bertopic_kexp_results/bertopic_results_20250605_123456_topic_summary.json
 ```
 
-### 3. Create Analysis Views
+Features include:
+- Interactive topic browsing
+- Rating topics as good/bad
+- Topic search by keyword
+- Statistics on rated topics
+- Export of rating data for further analysis
 
-```bash
-python create_core_analysis_views.py
-```
+## Requirements
 
-### 4. Create Comment Chunks
-
-```bash
-python create_comment_chunks_analysis.py
-```
-
-### 5. Generate Embeddings (Coming Soon)
-
-```bash
-python generate_comment_embeddings.py  # Needs update to use chunking
-```
-
-## Key Findings
-
-### Comment Chunking Analysis
-
-- Evaluated 4 splitting strategies: standard, aggressive, conservative, double_newline
-- **Conservative strategy** performs best with 4.83/5 average rating
-- Dramatic shift in comment formatting around 2020 (from <2% to 40-54% multi-chunk comments)
-- 86.4% of chunks pass quality filters with the standard strategy
-
-### Database Schema
-
-The normalized schema includes:
-
-- **Dimension tables**: dim_artists, dim_tracks, dim_shows, dim_hosts, dim_programs
-- **Fact table**: fact_plays (1.5M+ records)
-- **Analysis tables**: comment_chunks_raw, comment_splitting_strategies
-- **Views**: Various analysis views for querying
-
-## Next Steps
-
-1. **Update embedding generation** to use the conservative chunking strategy
-2. **Implement chunk post-processing** to handle URL-only chunks
-3. **Generate embeddings** for all quality chunks
-4. **Build semantic search** interface for the embedded content
-
-## Technologies Used
-
-- **Database**: DuckDB
-- **Language**: Python 3.12
-- **Embedding Model**: MLX (Apple Silicon optimized)
-- **APIs**: KEXP Public API
-- **Analysis**: OpenAI GPT-4 (for evaluation)
+See `pyproject.toml` for dependencies. Main requirements:
+- Python 3.10+
+- DuckDB
+- Sentence Transformers
+- BERTopic
+- UMAP
+- HDBSCAN
+- Plotly
 
 ## License
 
-This project is for educational and research purposes. Please respect KEXP's terms of service when using their data.
+This project is proprietary and confidential.

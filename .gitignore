@@ -14,6 +14,7 @@ data/
 normalized_kexp_jsonl/
 kexp_data.db
 
+
 # Environment variables
 .env
 
@@ -21,6 +22,8 @@ kexp_data.db
 comment_chunks_sample.jsonl
 chunk_evaluation_samples/
 chunk_evaluations/
+
+bertopic_kexp_results/
 
 # Archive
 archive/

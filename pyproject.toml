@@ -1,17 +1,27 @@
 [project]
 name = "kexp-data-scripts"
 version = "0.1.0"
-description = "Add your description here"
+description = "Scripts for processing and analyzing KEXP data"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "bertopic>=0.17.0",
     "duckdb>=1.3.0",
+    "gensim>=4.3.2",
+    "hdbscan>=0.8.36",
     "mlx>=0.26.0",
     "mlx-embeddings>=0.0.3",
     "mlx-lm>=0.25.0",
+    "nltk>=3.8.1",
     "numpy>=2.2.6",
     "openai>=1.84.0",
     "pandas>=2.2.3",
+    "plotly>=5.20.0",
     "python-dotenv>=1.1.0",
     "requests>=2.32.3",
+    "scikit-learn>=1.5.0",
+    "scipy>=1.15.3",
+    "sentence-transformers>=2.5.0",
+    "spacy>=3.8.7",
+    "umap-learn>=0.5.7",
 ]
