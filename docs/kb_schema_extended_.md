@@ -113,6 +113,7 @@ This schema is designed to be comprehensive. You can select core components for 
 34. **`Studio`**
 35. **`HistoricalEvent`**
 36. **`ListenerRequest`**
+37. **`LyricSnippet`**
 
 #### Extended Relationships:
 
