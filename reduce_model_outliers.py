@@ -112,11 +112,13 @@ def main(model_dir: str, use_llm: bool):
     # 4. Reduce outliers
     logger.info("Reducing outliers with 'embeddings' strategy...")
     topics = topic_model.topics_
+
     new_topics = topic_model.reduce_outliers(
         documents,
         topics=topics,
         embeddings=embeddings,
-        strategy="embeddings"
+        strategy="embeddings",
+        threshold=0.5,
     )
 
     # 5. Update topics with the new assignments after outlier reduction

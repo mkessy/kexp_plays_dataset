@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from typing import Optional, Tuple, List, Dict, Any
 import openai
 import json
+import argparse
 
 # BERTopic dependencies
 from bertopic import BERTopic
@@ -46,7 +47,7 @@ load_dotenv()
 # Configuration
 DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
 CONSERVATIVE_STRATEGY_ID = 3  # Based on analysis in create_comment_chunks_analysis.py
-MIN_CHUNK_LENGTH = int(os.getenv("MIN_CHUNK_LENGTH", 100))
+MIN_CHUNK_LENGTH = int(os.getenv("MIN_CHUNK_LENGTH", 75))
 MIN_ALPHA_RATIO = float(os.getenv("MIN_ALPHA_RATIO", 0.4))
 MIN_ALPHANUM_RATIO = float(os.getenv("MIN_ALPHANUM_RATIO", 0.6))
 CHUNK_EMBEDDING_TABLE = os.getenv(
@@ -366,36 +367,35 @@ def configure_bertopic_components(
         min_samples=min_samples,
         metric='euclidean',
         cluster_selection_method='eom',
-        prediction_data=True
+        prediction_data=True,
     )
 
     # 3. Create vectorizer with dynamic df ranges
     custom_stop_words = create_custom_stop_words()
 
-    # Calculate safe document frequency ranges
-    min_df = 10
-    max_df = 0.8
-
     vectorizer_model = CountVectorizer(
         stop_words=custom_stop_words,
-        ngram_range=(1, 3),
-        min_df=min_df,
-        max_df=max_df
+        ngram_range=(1, 2),
+        min_df=10,
+        max_df=0.7
     )
 
     # Define representation models for diverse topic representations
     # "Main" uses the default c-TF-IDF representation
     representation_model = {
-        "Main": KeyBERTInspired(),
-        "MMR": MaximalMarginalRelevance(diversity=0.7),
+        "Main": KeyBERTInspired(top_n_words=15, nr_repr_docs=10),
+        "MMR": MaximalMarginalRelevance(diversity=0.5, top_n_words=15),
     }
 
     # Add POS only if spacy is available to prevent crashes
     try:
         import spacy
         spacy.load('en_core_web_sm')
-        representation_model["POS"] = PartOfSpeech("en_core_web_sm")
-        logger.info("Added 'POS' to representation models.")
+
+        representation_model["POS"] = PartOfSpeech(
+            "en_core_web_sm", pos_patterns=get_improved_pos_patterns())
+        logger.info(
+            "Added 'POS' to representation models. Using improved POS patterns.")
     except (ImportError, OSError):
         logger.warning(
             "spaCy or 'en_core_web_sm' not found. Skipping 'POS' representation.")
@@ -436,7 +436,6 @@ def get_improved_pos_patterns() -> List[List[Dict[str, str]]]:
 def run_bertopic_analysis(
     documents: List[str],
     embeddings: np.ndarray,
-    ctfidf_model: ClassTfidfTransformer,
     umap_model: UMAP,
     hdbscan_model: HDBSCAN,
     vectorizer_model: CountVectorizer,
@@ -461,6 +460,11 @@ def run_bertopic_analysis(
 
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
+    ctfidf_model = ClassTfidfTransformer(
+        reduce_frequent_words=True,
+        bm25_weighting=True,
+    )
+
     # Configure BERTopic model
     topic_model = BERTopic(
         ctfidf_model=ctfidf_model,
@@ -469,6 +473,7 @@ def run_bertopic_analysis(
         hdbscan_model=hdbscan_model,
         vectorizer_model=vectorizer_model,
         representation_model=representation_model,
+        calculate_probabilities=False,
         verbose=True
     ).fit(documents, embeddings=embeddings)
 
@@ -643,36 +648,7 @@ def analyze_and_save_results(
     except Exception as e:
         logger.warning(f"Could not generate or save hierarchical topics: {e}")
 
-    try:
-        # Topic distance map
-        fig_topics = topic_model.visualize_topics()
-        fig_topics.write_html(
-            str(output_dir / f"{results_prefix}_topic_distances.html"))
-    except Exception as e:
-        logger.warning(
-            f"Error generating topic distance map visualization: {e}")
-
-    try:
-        # Topic term importance
-        if len(topic_info[topic_info['Topic'] != -1]) > 1:
-            fig_terms = topic_model.visualize_barchart(
-                top_n_topics=min(10, len(topic_summary)-1))
-            fig_terms.write_html(
-                str(output_dir / f"{results_prefix}_topic_terms.html"))
-    except Exception as e:
-        logger.warning(f"Error generating topic terms visualization: {e}")
-
     if hierarchical_topics is not None:
-        try:
-            # Topic hierarchy dendrogram
-            fig_hierarchy = topic_model.visualize_hierarchy(
-                hierarchical_topics=hierarchical_topics)
-            if fig_hierarchy:
-                fig_hierarchy.write_html(
-                    str(output_dir / f"{results_prefix}_topic_hierarchy.html"))
-        except Exception as e:
-            logger.warning(
-                f"Error generating topic hierarchy visualization: {e}")
 
         try:
             # Topic tree text representation
@@ -682,25 +658,6 @@ def analyze_and_save_results(
             logger.info(f"Saved topic tree to {results_prefix}_topic_tree.txt")
         except Exception as e:
             logger.warning(f"Could not generate topic tree: {e}")
-
-        try:
-            # Hierarchical documents visualization
-            fig_hier_docs = topic_model.visualize_hierarchical_documents(
-                documents,
-                hierarchical_topics,
-                embeddings=embeddings
-            )
-            fig_hier_docs.write_html(
-                str(output_dir /
-                    f"{results_prefix}_hierarchical_documents.html")
-            )
-            logger.info(
-                f"Saved hierarchical documents visualization to {results_prefix}_hierarchical_documents.html")
-        except Exception as e:
-            logger.warning(
-                f"Error generating hierarchical documents visualization: {e}")
-
-    logger.info(f"Finished saving visualizations to {output_dir}")
 
     # Return summary for further analysis
     outlier_count = topic_info.loc[topic_info['Topic'] == -1,
@@ -718,12 +675,148 @@ def analyze_and_save_results(
     return analysis_results
 
 
+def reduce_and_save_model(
+    topic_model: BERTopic,
+    documents: List[str],
+    topics: List[int],
+    embeddings: np.ndarray,
+    chunk_ids: List[int],
+    metadata_df: pd.DataFrame,
+    output_dir: Path,
+    original_file_prefix: str,
+    use_llm: bool = False
+):
+    """Reduces outliers, optionally applies LLM, and saves results."""
+    logger.info(
+        f"--- Starting outlier reduction for model with prefix: {original_file_prefix} ---")
+
+    # 1. Reduce outliers
+    logger.info("Reducing outliers with 'embeddings' strategy...")
+    new_topics = topic_model.reduce_outliers(
+        documents,
+        topics=topics,
+        embeddings=embeddings,
+        strategy="embeddings",
+        threshold=0.5,
+    )
+
+    # 2. Update topics
+    logger.info("Updating topics to reflect outlier reduction...")
+    topic_model.update_topics(documents, topics=new_topics)
+
+    # 3. Handle LLM representation
+    if use_llm:
+        logger.info(
+            "--- Proceeding with LLM-based topic representation generation ---")
+        representation_model = topic_model.representation_model
+        if representation_model is None:
+            logger.warning(
+                "No representation model found. Initializing an empty one.")
+            representation_model = {}
+
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if openai_api_key:
+            logger.info(
+                "OpenAI API key found. Preparing LLM-based topic summaries with GPT-4o-mini...")
+            try:
+                llm_prompt = """I am a topic modeler analyzing DJ comments from KEXP, a public radio station.
+I have a topic that is described by the following keywords: [KEYWORDS]
+The following are a few representative comments from this topic:
+[DOCUMENTS]
+Based on the keywords and comments, provide a concise, expert-level summary (10-15 words) of this topic.
+The summary should capture the essence of what the comment is communicating about the music or artist. Focus on qualitative descriptions of the music or artist like genre, style, mood, etc.
+Consider the keywords and try and relate them to the comments. Use the keywords to help guide your summary. At the end of the summary include 3 - 4 tags that describe the topic.
+Your response MUST be in the format:
+topic: <summary> <tags>
+"""
+                client = openai.OpenAI(api_key=openai_api_key)
+                representation_model_llm = OpenAI(
+                    client,
+                    model="gpt-4o-mini",
+                    prompt=llm_prompt,
+                    diversity=0.1,
+                    delay_in_seconds=4,
+                    nr_docs=10,
+                    doc_length=400,
+                    tokenizer='char'
+                )
+                if hasattr(representation_model, '__setitem__'):
+                    representation_model["LLM"] = representation_model_llm
+                    logger.info(
+                        "Successfully added 'LLM' to representation models for topic update.")
+                    # Update topics again to generate LLM representations
+                    logger.info("Updating topics with LLM representations...")
+                    topic_model.update_topics(
+                        documents,
+                        topics=new_topics,
+                        representation_model=representation_model
+                    )
+                else:
+                    logger.warning(
+                        "Cannot add LLM representation to the existing representation model. Skipping LLM update.")
+
+            except Exception as e:
+                logger.warning(
+                    f"Failed to initialize or run OpenAI representation model. Error: {e}")
+        else:
+            logger.warning(
+                "OPENAI_API_KEY not found. Cannot generate LLM representations.")
+
+        # Analyze and save LLM results
+        reduced_prefix = f"{original_file_prefix}_reduced_llm"
+        logger.info(
+            f"Analyzing and saving LLM-enhanced results with prefix: {reduced_prefix}")
+        analyze_and_save_results(
+            topic_model=topic_model,
+            topics=new_topics,
+            documents=documents,
+            chunk_ids=chunk_ids,
+            metadata_df=metadata_df,
+            output_dir=output_dir,
+            embeddings=embeddings,
+            results_prefix=reduced_prefix
+        )
+        # Save the final LLM-enhanced model
+        reduced_model_path = output_dir / f"{reduced_prefix}_model"
+        logger.info(f"Saving LLM-enhanced model to {reduced_model_path}")
+        topic_model.save(str(reduced_model_path),
+                         serialization="safetensors", save_ctfidf=True, save_embedding_model="all-MiniLM-L6-v2")
+        logger.info(
+            f"--- Successfully saved LLM-enhanced model: {reduced_prefix} ---")
+
+    else:
+        # Analyze and save standard reduced results
+        reduced_prefix = f"{original_file_prefix}_reduced"
+        logger.info(
+            f"Analyzing and saving reduced results with prefix: {reduced_prefix}")
+        analyze_and_save_results(
+            topic_model=topic_model,
+            topics=new_topics,
+            documents=documents,
+            chunk_ids=chunk_ids,
+            metadata_df=metadata_df,
+            output_dir=output_dir,
+            embeddings=embeddings,
+            results_prefix=reduced_prefix
+        )
+
+        # Save the final reduced model
+        reduced_model_path = output_dir / f"{reduced_prefix}_model"
+        logger.info(f"Saving reduced model to {reduced_model_path}")
+        topic_model.save(str(reduced_model_path),
+                         serialization="safetensors", save_ctfidf=True, save_embedding_model=False)
+        logger.info(
+            f"--- Successfully reduced and saved model: {reduced_prefix} ---")
+
+
 def optimize_hyperparameters(
     documents: List[str],
     embeddings: np.ndarray,
     chunk_ids: List[int],
     metadata_df: pd.DataFrame,
-    output_dir: Path
+    output_dir: Path,
+    reduce_outliers: bool = False,
+    use_llm_for_reduction: bool = False
 ) -> None:
     logger.info("Starting hyperparameter optimization for BERTopic")
 
@@ -740,7 +833,7 @@ def optimize_hyperparameters(
 
         # Varying neighborhood sizes
         # (5, 5, 50, 10, 'cosine', 'euclidean'),   # Very local
-        (5, 5, 25, 10, 'cosine', 'euclidean'),   # Very local
+        (10, 5, 35, 35, 'cosine', 'euclidean'),   # Very local
         # (50, 10, 100, 20, 'cosine', 'euclidean'),  # More global
         # (100, 15, 150, 30, 'cosine', 'euclidean'),  # Most global
 
@@ -779,13 +872,10 @@ def optimize_hyperparameters(
             n_documents=len(documents)  # Add document count
         )
 
-        ctfidf_model = ClassTfidfTransformer(reduce_frequent_words=True)
-
         # Run BERTopic
         topic_model, topics = run_bertopic_analysis(
             documents=documents,
             embeddings=embeddings,
-            ctfidf_model=ctfidf_model,
             umap_model=umap_model,
             hdbscan_model=hdbscan_model,
             vectorizer_model=vectorizer_model,
@@ -839,6 +929,20 @@ def optimize_hyperparameters(
         }
         results.append(analysis)
 
+        # Reduce outliers if requested
+        if reduce_outliers:
+            reduce_and_save_model(
+                topic_model=topic_model,
+                documents=documents,
+                topics=topics,
+                embeddings=embeddings,
+                chunk_ids=chunk_ids,
+                metadata_df=metadata_df,
+                output_dir=output_dir,
+                original_file_prefix=analysis['file_prefix'],
+                use_llm=use_llm_for_reduction
+            )
+
     # Save comparison of configurations
     configs_df = pd.DataFrame([
         {
@@ -866,6 +970,29 @@ def optimize_hyperparameters(
 
 def main():
     """Main function to run BERTopic analysis on KEXP comment chunks."""
+    parser = argparse.ArgumentParser(
+        description="Run BERTopic analysis on KEXP comment chunks.")
+    parser.add_argument(
+        "--optimize",
+        action="store_true",
+        help="Run hyperparameter optimization."
+    )
+    parser.add_argument(
+        "--reduce",
+        action="store_true",
+        help="Reduce outliers for the generated model(s). Can be used with or without --optimize."
+    )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        default=False,
+        help="Use LLM for topic representation during outlier reduction. Requires --reduce."
+    )
+    args = parser.parse_args()
+
+    if args.llm and not args.reduce:
+        parser.error("--llm requires --reduce.")
+
     logger.info("Starting BERTopic analysis for KEXP comment chunks")
 
     # Dependency check for POS representation
@@ -897,7 +1024,7 @@ def main():
             f"Processing {len(documents)} documents with {embeddings.shape[1]}-dimensional embeddings")
 
         # Either run optimization or a single model
-        use_optimization = True
+        use_optimization = args.optimize
 
         if use_optimization:
             # Run hyperparameter optimization
@@ -906,7 +1033,9 @@ def main():
                 embeddings=embeddings,
                 chunk_ids=chunk_ids,
                 metadata_df=metadata_df,
-                output_dir=OUTPUT_DIR
+                output_dir=OUTPUT_DIR,
+                reduce_outliers=args.reduce,
+                use_llm_for_reduction=args.llm
             )
             logger.info(
                 "Optimization complete. Results saved for comparison.")
@@ -950,6 +1079,20 @@ def main():
                 save_embedding_model=False
             )
             logger.info(f"Saved model to {model_path}")
+
+            # Reduce outliers if requested
+            if args.reduce:
+                reduce_and_save_model(
+                    topic_model=topic_model,
+                    documents=documents,
+                    topics=topics,
+                    embeddings=embeddings,
+                    chunk_ids=chunk_ids,
+                    metadata_df=metadata_df,
+                    output_dir=OUTPUT_DIR,
+                    original_file_prefix=analysis['file_prefix'],
+                    use_llm=args.llm
+                )
 
     except Exception as e:
         logger.error(f"Error in main execution: {e}", exc_info=True)
