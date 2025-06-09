@@ -22,6 +22,7 @@ kexp_data.db.tmp/
 Library
 .claude.json
 
+.claude.json
 
 # Analysis outputs
 comment_chunks_sample.jsonl
