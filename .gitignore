@@ -18,6 +18,10 @@ kexp_data.db.tmp/
 # Environment variables
 .env
 .claude
+.cursor
+.local
+.conda
+.cache
 .npm
 Library
 .claude.json
