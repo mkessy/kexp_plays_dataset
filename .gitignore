@@ -17,6 +17,11 @@ kexp_data.db.tmp/
 
 # Environment variables
 .env
+.claude
+.npm
+Library
+.claude.json
+
 
 # Analysis outputs
 comment_chunks_sample.jsonl

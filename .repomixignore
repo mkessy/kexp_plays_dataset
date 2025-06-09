@@ -1,0 +1,6 @@
+uv.lock
+data/
+enrichment_reports
+verification_results
+dist/
+archive/
