@@ -1,4 +1,80 @@
+#!/usr/bin/env python3
 import duckdb
+
+# --- OBJECT LISTS FOR DROPPING ---
+
+# List of all Knowledge Base tables to be dropped, in an order that respects dependencies.
+KB_TABLES_TO_DROP = [
+    # Bridge tables first
+    "bridge_kb_song_to_kexp",
+    "bridge_kb_artist_to_kexp",
+    # Relationship tables
+    "rel_Artist_Person_Role_Played_Role",
+    "rel_Entity_Has_URL",
+    "rel_Artist_Originates_From_Location",
+    "rel_Album_Has_Genre",
+    "rel_Song_Has_Genre",
+    "rel_Artist_Has_Genre",
+    "rel_Artist_Plays_Instrument",
+    "rel_Artist_Performed_At_Event",
+    "rel_Release_By_Label",
+    "rel_Song_Appears_On_Release",
+    "rel_Song_Based_On_Work",
+    "rel_Artist_Member_Of_Artist",
+    "rel_Artist_Performed_Song",
+    # Core entity tables (those referenced by other tables dropped last)
+    "kb_Artist_Person_Role",
+    "kb_Event",
+    "kb_Venue",
+    "kb_Role",
+    "kb_URL",
+    "kb_Date_Entity",
+    "kb_Release",
+    "kb_Album",
+    "kb_Song",
+    "kb_Work",
+    "kb_Instrument",
+    "kb_Genre",
+    "kb_RecordLabel",
+    "kb_Artist",
+    "kb_Person",
+    "kb_Location"
+]
+
+# List of all ENUM types to be dropped
+KB_ENUMS_TO_DROP = [
+    "artist_type",
+    "event_type",
+    "link_type",
+    "work_of_art_type",
+    "entity_type",
+    "role_category",
+    "rel_Artist_Performed_Song",
+    "rel_Song_Featured_Artist",
+    "rel_Artist_Member_Of_Artist",
+    "rel_Song_Appears_On_Release",
+    "rel_Release_By_Label",
+    "rel_Artist_Performed_At_Event",
+    "rel_Has_Genre",
+    "rel_Artist_Originates_From_Location",
+    "rel_Entity_Has_URL",
+    "rel_Artist_Person_Role_Played_Role",
+    "rel_Artist_Plays_Instrument",
+    "rel_Song_Based_On_Work"
+]
+
+
+def drop_all_kb_objects(conn: duckdb.DuckDBPyConnection):
+    """Drops all knowledge base tables and ENUM types for a clean slate."""
+    print("\n🔥 Dropping all existing Knowledge Base objects...")
+    for table in KB_TABLES_TO_DROP:
+        conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
+    print("    ✅ Dropped all KB tables.")
+
+    for enum in KB_ENUMS_TO_DROP:
+        conn.execute(f"DROP TYPE IF EXISTS {enum} CASCADE;")
+    print("    ✅ Dropped all KB ENUM types.")
+    print("🔥 All KB objects dropped successfully.")
 
 # --- ENUM CREATION ---
 
@@ -12,6 +88,10 @@ def create_enum_types(conn: duckdb.DuckDBPyConnection):
         "CREATE TYPE IF NOT EXISTS link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'DISCOGS', 'ALLMUSIC', 'LASTFM', 'WIKIDATA', 'STREAMING', 'OTHER');",
         "CREATE TYPE IF NOT EXISTS work_of_art_type AS ENUM ('SONG', 'ALBUM');",
         "CREATE TYPE IF NOT EXISTS entity_type AS ENUM ('ARTIST', 'SONG', 'RELEASE', 'LABEL', 'EVENT', 'GENRE', 'LOCATION', 'PERSON', 'ROLE', 'INSTRUMENT', 'WORK');",
+
+        # New Role Category Enum
+        "CREATE TYPE IF NOT EXISTS role_category AS ENUM ('Vocals', 'Instrument Performance', 'Production', 'Engineering', 'Composition', 'Performance Direction', 'Remix/DJ', 'Other');",
+
         # Relationship types (for completeness, though not used as columns in specific tables)
         "CREATE TYPE IF NOT EXISTS rel_Artist_Performed_Song AS ENUM ('PERFORMED_SONG');",
         "CREATE TYPE IF NOT EXISTS rel_Song_Featured_Artist AS ENUM ('FEATURED_ARTIST');",
@@ -125,7 +205,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 8. kb_Genre
+        # 8. kb_Genre (Corrected Schema)
         '''CREATE TABLE IF NOT EXISTS kb_Genre (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
@@ -188,10 +268,11 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 14. kb_Role
+        # 14. kb_Role (Corrected Schema)
         '''CREATE TABLE IF NOT EXISTS kb_Role (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
+            category role_category,
             description TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -334,10 +415,22 @@ def main():
     print(f"Connecting to DuckDB at {db_path} ...")
     conn = duckdb.connect(db_path)  # type: ignore
     try:
+        # Drop everything first for a clean slate
+        drop_all_kb_objects(conn)
+
+        # Now, create the schema and ingest initial data
         create_enum_types(conn)
         create_kb_tables(conn)
         ingest_worldcities_to_kb_location(
             conn, "data/kb_dumps/worldcities.csv")
+
+        print("\n🎉 Schema creation process completed successfully!")
+
+    except Exception as e:
+        print(f"\n❌ An error occurred during schema creation: {e}")
+        import traceback
+        traceback.print_exc()
+
     finally:
         conn.close()
         print("\n🔐 Database connection closed.")
