@@ -49,18 +49,6 @@ KB_ENUMS_TO_DROP = [
     "work_of_art_type",
     "entity_type",
     "role_category",
-    "rel_Artist_Performed_Song",
-    "rel_Song_Featured_Artist",
-    "rel_Artist_Member_Of_Artist",
-    "rel_Song_Appears_On_Release",
-    "rel_Release_By_Label",
-    "rel_Artist_Performed_At_Event",
-    "rel_Has_Genre",
-    "rel_Artist_Originates_From_Location",
-    "rel_Entity_Has_URL",
-    "rel_Artist_Person_Role_Played_Role",
-    "rel_Artist_Plays_Instrument",
-    "rel_Song_Based_On_Work"
 ]
 
 
@@ -83,11 +71,11 @@ def create_enum_types(conn: duckdb.DuckDBPyConnection):
     print("\n🏗️  Creating ENUM types...")
     enum_statements = [
         # Entity types
-        "CREATE TYPE IF NOT EXISTS artist_type AS ENUM ('PERSON', 'GROUP', 'CHARACTER', 'ORCHESTRA', 'OTHER');",
-        "CREATE TYPE IF NOT EXISTS event_type AS ENUM ('SHOW', 'FESTIVAL', 'IN_STUDIO_SESSION', 'OTHER');",
-        "CREATE TYPE IF NOT EXISTS link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'DISCOGS', 'ALLMUSIC', 'LASTFM', 'WIKIDATA', 'STREAMING', 'OTHER');",
-        "CREATE TYPE IF NOT EXISTS work_of_art_type AS ENUM ('SONG', 'ALBUM');",
-        "CREATE TYPE IF NOT EXISTS entity_type AS ENUM ('ARTIST', 'SONG', 'RELEASE', 'LABEL', 'EVENT', 'GENRE', 'LOCATION', 'PERSON', 'ROLE', 'INSTRUMENT', 'WORK');",
+        "CREATE TYPE artist_type AS ENUM ('PERSON', 'GROUP', 'CHARACTER', 'ORCHESTRA', 'OTHER');",
+        "CREATE TYPE event_type AS ENUM ('SHOW', 'FESTIVAL', 'IN_STUDIO_SESSION', 'OTHER');",
+        "CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'DISCOGS', 'ALLMUSIC', 'LASTFM', 'WIKIDATA', 'STREAMING', 'OTHER');",
+        "CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');",
+        "CREATE TYPE entity_type AS ENUM ('ARTIST', 'SONG', 'RELEASE', 'LABEL', 'EVENT', 'GENRE', 'LOCATION', 'PERSON', 'ROLE', 'INSTRUMENT', 'WORK');",
 
         # New Role Category Enum
         "CREATE TYPE IF NOT EXISTS role_category AS ENUM ('Vocals', 'Instrument Performance', 'Production', 'Engineering', 'Composition', 'Performance Direction', 'Remix/DJ', 'Other');",
@@ -116,21 +104,20 @@ def create_enum_types(conn: duckdb.DuckDBPyConnection):
 def create_kb_tables(conn: duckdb.DuckDBPyConnection):
     print("\n🏗️  Creating KB tables...")
     table_statements = [
-        # 9. kb_Location
-        '''CREATE TABLE IF NOT EXISTS kb_Location (
-            kb_id UUID PRIMARY KEY,
-            city TEXT NULL,
-            state_or_region TEXT NULL,
-            country TEXT NULL,
-            latitude DECIMAL(9,6) NULL,
-            longitude DECIMAL(9,6) NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (city, state_or_region, country)
+        '''
+        CREATE TABLE kb_Location (
+        kb_id UUID PRIMARY KEY,
+        mb_area_id UUID UNIQUE,       
+        name VARCHAR NOT NULL,
+        type VARCHAR,
+        country_code VARCHAR(3),
+        latitude DECIMAL(9,6),
+        longitude DECIMAL(9,6),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-
-        # 2. kb_Person
-        '''CREATE TABLE IF NOT EXISTS kb_Person (
+        # kb_Person
+        '''CREATE TABLE kb_Person (
             kb_id UUID PRIMARY KEY,
             legal_name TEXT NULL,
             common_name TEXT NOT NULL,
@@ -142,8 +129,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (mb_person_id)
         );''',
-        # 1. kb_Artist
-        '''CREATE TABLE IF NOT EXISTS kb_Artist (
+        # kb_Artist
+        '''CREATE TABLE kb_Artist (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             mb_artist_id UUID NULL,
@@ -154,8 +141,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # kb_Work
-        '''CREATE TABLE IF NOT EXISTS kb_Work (
+        # Other tables remain the same as previous correct version...
+        '''CREATE TABLE kb_Work (
             kb_id UUID PRIMARY KEY,
             title VARCHAR NOT NULL,
             mb_work_id UUID,
@@ -164,8 +151,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 4. kb_Song
-        '''CREATE TABLE IF NOT EXISTS kb_Song (
+        '''CREATE TABLE kb_Song (
             kb_id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             type work_of_art_type DEFAULT 'SONG',
@@ -174,8 +160,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 5. kb_Album
-        '''CREATE TABLE IF NOT EXISTS kb_Album (
+        '''CREATE TABLE kb_Album (
             kb_id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             type work_of_art_type DEFAULT 'ALBUM',
@@ -183,8 +168,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 6. kb_Release
-        '''CREATE TABLE IF NOT EXISTS kb_Release (
+        '''CREATE TABLE kb_Release (
             kb_id UUID PRIMARY KEY,
             album_id UUID NULL REFERENCES kb_Album(kb_id),
             title TEXT NOT NULL,
@@ -196,8 +180,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 7. kb_RecordLabel
-        '''CREATE TABLE IF NOT EXISTS kb_RecordLabel (
+        '''CREATE TABLE kb_RecordLabel (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             mb_label_id UUID NULL,
@@ -205,8 +188,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 8. kb_Genre (Corrected Schema)
-        '''CREATE TABLE IF NOT EXISTS kb_Genre (
+        '''CREATE TABLE kb_Genre (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             mb_genre_id UUID NULL,
@@ -214,18 +196,16 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # kb_Instrument
-        '''CREATE TABLE IF NOT EXISTS kb_Instrument (
+        '''CREATE TABLE kb_Instrument (
             kb_id UUID PRIMARY KEY,
             name VARCHAR NOT NULL,
             mb_instrument_id UUID,
-            instrument_type VARCHAR, -- 'string', 'percussion', 'wind', etc.
+            instrument_type VARCHAR,
             description VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 10. kb_Venue
-        '''CREATE TABLE IF NOT EXISTS kb_Venue (
+        '''CREATE TABLE kb_Venue (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             location_id UUID NULL REFERENCES kb_Location(kb_id),
@@ -233,8 +213,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 11. kb_Event
-        '''CREATE TABLE IF NOT EXISTS kb_Event (
+        '''CREATE TABLE kb_Event (
             kb_id UUID PRIMARY KEY,
             event_name TEXT NULL,
             kb_event_type event_type,
@@ -246,8 +225,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 12. kb_Date_Entity
-        '''CREATE TABLE IF NOT EXISTS kb_Date_Entity (
+        '''CREATE TABLE kb_Date_Entity (
             kb_id UUID PRIMARY KEY,
             full_date DATE NULL,
             year INTEGER NULL,
@@ -259,8 +237,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (full_date, qualifier)
         );''',
-        # 13. kb_URL
-        '''CREATE TABLE IF NOT EXISTS kb_URL (
+        '''CREATE TABLE kb_URL (
             kb_id UUID PRIMARY KEY,
             address TEXT NOT NULL UNIQUE,
             kb_link_type link_type,
@@ -268,8 +245,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 14. kb_Role (Corrected Schema)
-        '''CREATE TABLE IF NOT EXISTS kb_Role (
+        '''CREATE TABLE kb_Role (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
             category role_category,
@@ -376,44 +352,13 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
     print("✅ KB tables created.")
 
 
-def ingest_worldcities_to_kb_location(conn: duckdb.DuckDBPyConnection, csv_path: str):
-    print(f"\n🌍 Ingesting world cities from {csv_path} into kb_Location...")
-    # Read CSV into DuckDB temp table
-    conn.execute(f"""
-        CREATE OR REPLACE TEMP TABLE tmp_worldcities AS
-        SELECT * FROM read_csv_auto('{csv_path}', HEADER=TRUE)
-    """)
-    # Insert into kb_Location, generating UUIDs, upsert on unique constraint
-    insert_sql = """
-        INSERT INTO kb_Location (kb_id, city, state_or_region, country, latitude, longitude, created_at, updated_at)
-        SELECT
-            uuid(),
-            city,
-            admin_name AS state_or_region,
-            country,
-            CAST(lat AS DOUBLE),
-            CAST(lng AS DOUBLE),
-            CURRENT_TIMESTAMP,
-            CURRENT_TIMESTAMP
-        FROM tmp_worldcities
-        ON CONFLICT (city, state_or_region, country) DO NOTHING
-    """
-    conn.execute(insert_sql)
-    # Count how many were inserted
-    row: tuple[int, ...] | None = conn.execute(
-        "SELECT COUNT(*) FROM kb_Location").fetchone()
-    count: int = row[0] if row else 0
-    print(f"✅ kb_Location now has {count:,} rows.")
-    # Drop temp table
-    conn.execute("DROP TABLE IF EXISTS tmp_worldcities")
-
 # --- MAIN ---
 
 
 def main():
-    db_path = "kexp_data.db"  # Default path, adjust as needed
+    db_path = "kexp_data.db"
     print(f"Connecting to DuckDB at {db_path} ...")
-    conn = duckdb.connect(db_path)  # type: ignore
+    conn = duckdb.connect(db_path)
     try:
         # Drop everything first for a clean slate
         drop_all_kb_objects(conn)
@@ -421,10 +366,8 @@ def main():
         # Now, create the schema and ingest initial data
         create_enum_types(conn)
         create_kb_tables(conn)
-        ingest_worldcities_to_kb_location(
-            conn, "data/kb_dumps/worldcities.csv")
 
-        print("\n🎉 Schema creation process completed successfully!")
+        print("\n🎉 Schema creation and initial population process completed successfully!")
 
     except Exception as e:
         print(f"\n❌ An error occurred during schema creation: {e}")
