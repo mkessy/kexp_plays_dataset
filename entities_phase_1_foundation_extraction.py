@@ -53,8 +53,8 @@ class Phase1FoundationExtractor:
 
         # Check KEXP-MB connection coverage
         mb_coverage = self.conn.execute("""
-            SELECT COUNT(DISTINCT mb_id) 
-            FROM dim_artists_master 
+            SELECT COUNT(DISTINCT mb_id)
+            FROM dim_artists_master
             WHERE mb_id IS NOT NULL
         """).fetchone()[0]
 
@@ -73,7 +73,8 @@ class Phase1FoundationExtractor:
         staging_tables = [
             'stage_genre_extraction',
             'stage_location_extraction',
-            'stage_role_extraction'
+            'stage_role_extraction',
+            'stage_instrument_extraction'
         ]
 
         for table in staging_tables:
@@ -96,7 +97,7 @@ class Phase1FoundationExtractor:
             CREATE TABLE stage_location_extraction (
                 mb_area_id UUID,
                 location_type VARCHAR, -- 'main_area' or 'begin_area'
-                country_name VARCHAR,
+                location_name VARCHAR,
                 country_code VARCHAR,
                 city_name VARCHAR,
                 region_name VARCHAR,
@@ -120,6 +121,16 @@ class Phase1FoundationExtractor:
             )
         """)
 
+        self.conn.execute("""
+            CREATE TABLE stage_instrument_extraction (
+                instrument_name VARCHAR NOT NULL,
+                instrument_category VARCHAR,
+                usage_count INTEGER,
+                unique_artists INTEGER,
+                sample_artists TEXT
+            )
+        """)
+
         print("✅ Staging tables created")
 
     def extract_genres_to_staging(self):
@@ -129,7 +140,7 @@ class Phase1FoundationExtractor:
         # Extract genres with vote count and artist coverage
         self.conn.execute("""
             WITH genre_artist_samples AS (
-                SELECT 
+                SELECT
                     g.id as genre_id,
                     g.name as genre_name,
                     g.disambiguation as genre_disambiguation,
@@ -144,7 +155,7 @@ class Phase1FoundationExtractor:
                 AND g.name != ''
             ),
             genre_stats AS (
-                SELECT 
+                SELECT
                     genre_id,
                     genre_name,
                     genre_disambiguation,
@@ -157,14 +168,14 @@ class Phase1FoundationExtractor:
                 AND COUNT(DISTINCT artist_name) >= 2  -- Minimum artist coverage
             )
             INSERT INTO stage_genre_extraction
-            SELECT 
+            SELECT
                 CAST(genre_id AS UUID) as mb_genre_id,
                 genre_name,
                 genre_disambiguation,
                 total_votes,
                 artist_count,
                 sample_artists,
-                CASE 
+                CASE
                     WHEN total_votes >= 50 AND artist_count >= 10 THEN 5
                     WHEN total_votes >= 20 AND artist_count >= 5 THEN 4
                     WHEN total_votes >= 10 AND artist_count >= 3 THEN 3
@@ -180,10 +191,10 @@ class Phase1FoundationExtractor:
 
         # Show quality distribution
         quality_dist = self.conn.execute("""
-            SELECT quality_score, COUNT(*) as count, 
+            SELECT quality_score, COUNT(*) as count,
                    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percent
-            FROM stage_genre_extraction 
-            GROUP BY quality_score 
+            FROM stage_genre_extraction
+            GROUP BY quality_score
             ORDER BY quality_score DESC
         """).fetchall()
 
@@ -191,29 +202,28 @@ class Phase1FoundationExtractor:
         for score, count, percent in quality_dist:
             print(f"        Score {score}: {count:,} genres ({percent}%)")
 
-    def extract_locations_to_staging(self):
         """Extract location data to staging table."""
         print("\n🌍 Extracting locations to staging...")
 
         # Extract main areas and begin areas with ISO codes (now confirmed available)
         self.conn.execute("""
             INSERT INTO stage_location_extraction
-            SELECT 
+            SELECT
                 CAST(mb.area.id AS UUID) as mb_area_id,
                 'main_area' as location_type,
-                mb.area.name as country_name,
-                CASE 
-                    WHEN mb.area."iso-3166-1-codes" IS NOT NULL 
+                mb.area.name as location_name,
+                CASE
+                    WHEN mb.area."iso-3166-1-codes" IS NOT NULL
                          AND array_length(mb.area."iso-3166-1-codes") > 0
                     THEN mb.area."iso-3166-1-codes"[1]
-                    ELSE NULL 
+                    ELSE NULL
                 END as country_code,
                 NULL as city_name,  -- Could be enhanced later with hierarchy parsing
-                CASE 
-                    WHEN mb.area."iso-3166-2-codes" IS NOT NULL 
+                CASE
+                    WHEN mb.area."iso-3166-2-codes" IS NOT NULL
                          AND array_length(mb.area."iso-3166-2-codes") > 0
                     THEN mb.area."iso-3166-2-codes"[1]
-                    ELSE NULL 
+                    ELSE NULL
                 END as region_name,
                 COUNT(DISTINCT CAST(mb.id AS UUID)) as artist_count,
                 FALSE as coordinates_available,  -- Confirmed not available
@@ -228,25 +238,25 @@ class Phase1FoundationExtractor:
             AND mb.area.name != ''
             GROUP BY mb.area.id, mb.area.name, mb.area."iso-3166-1-codes", mb.area."iso-3166-2-codes"
             HAVING COUNT(DISTINCT CAST(mb.id AS UUID)) >= 1
-            
+
             UNION ALL
-            
-            SELECT 
+
+            SELECT
                 CAST(mb."begin-area".id AS UUID) as mb_area_id,
                 'begin_area' as location_type,
-                mb."begin-area".name as country_name,
-                CASE 
-                    WHEN mb."begin-area"."iso-3166-1-codes" IS NOT NULL 
+                mb."begin-area".name as location_name,
+                CASE
+                    WHEN mb."begin-area"."iso-3166-1-codes" IS NOT NULL
                          AND array_length(mb."begin-area"."iso-3166-1-codes") > 0
                     THEN mb."begin-area"."iso-3166-1-codes"[1]
-                    ELSE NULL 
+                    ELSE NULL
                 END as country_code,
                 NULL as city_name,
-                CASE 
-                    WHEN mb."begin-area"."iso-3166-2-codes" IS NOT NULL 
+                CASE
+                    WHEN mb."begin-area"."iso-3166-2-codes" IS NOT NULL
                          AND array_length(mb."begin-area"."iso-3166-2-codes") > 0
                     THEN mb."begin-area"."iso-3166-2-codes"[1]
-                    ELSE NULL 
+                    ELSE NULL
                 END as region_name,
                 COUNT(DISTINCT CAST(mb.id AS UUID)) as artist_count,
                 FALSE as coordinates_available,
@@ -268,7 +278,7 @@ class Phase1FoundationExtractor:
             WITH location_ranked AS (
                 SELECT *,
                     ROW_NUMBER() OVER (
-                        PARTITION BY mb_area_id 
+                        PARTITION BY mb_area_id
                         ORDER BY artist_count DESC, location_type
                     ) as rn
                 FROM stage_location_extraction
@@ -287,9 +297,9 @@ class Phase1FoundationExtractor:
 
         # Show top locations with enhanced data
         top_locations = self.conn.execute("""
-            SELECT country_name, country_code, region_name, artist_count
-            FROM stage_location_extraction 
-            ORDER BY artist_count DESC 
+            SELECT location_name, country_code, region_name, artist_count
+            FROM stage_location_extraction
+            ORDER BY artist_count DESC
             LIMIT 10
         """).fetchall()
 
@@ -300,17 +310,65 @@ class Phase1FoundationExtractor:
             print(
                 f"        {country}{code_display}{region_display}: {count:,} artists")
 
-    def extract_roles_to_staging(self):
-        """Extract role data from relations to staging table."""
-        print("\n🎭 Extracting roles to staging...")
+    def extract_locations_to_staging(self):
+        """Extract location data to staging table."""
+        print("\n🌍 Extracting locations to staging...")
 
-        # Create enhanced relations table if it doesn't exist
-        print("    Creating enhanced relations analysis...")
+        # CORRECTED INSERT STATEMENT
+        insert_sql = """
+            INSERT INTO stage_location_extraction
+            WITH all_areas AS (
+                SELECT
+                    area.id as mb_area_id,
+                    'main_area' as location_type,
+                    area.name as location_name,
+                    area."iso-3166-1-codes"[1] as country_code,
+                    NULL as city_name,
+                    area."iso-3166-2-codes"[1] as region_name,
+                    mb.id as artist_id
+                FROM mb_artists_raw mb
+                WHERE mb.area IS NOT NULL AND mb.area.name IS NOT NULL AND mb.area.name != ''
+
+                UNION ALL
+
+                SELECT
+                    "begin-area".id as mb_area_id,
+                    'begin_area' as location_type,
+                    "begin-area".name as location_name,
+                    "begin-area"."iso-3166-1-codes"[1] as country_code,
+                    NULL as city_name,
+                    "begin-area"."iso-3166-2-codes"[1] as region_name,
+                    mb.id as artist_id
+                FROM mb_artists_raw mb
+                WHERE mb."begin-area" IS NOT NULL AND mb."begin-area".name IS NOT NULL AND mb."begin-area".name != ''
+            )
+            SELECT
+                CAST(mb_area_id AS UUID),
+                location_type,
+                location_name,
+                country_code,
+                city_name,
+                region_name,
+                COUNT(DISTINCT artist_id) as artist_count,
+                FALSE as coordinates_available, -- Not available from source
+                NULL as latitude,               -- Not available from source
+                NULL as longitude               -- Not available from source
+            FROM all_areas
+            WHERE mb_area_id IS NOT NULL AND CAST(artist_id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
+            GROUP BY ALL;
+        """
+        self.conn.execute(insert_sql)
+        location_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_location_extraction").fetchone()[0]
+        print(f"✅ Extracted {location_count:,} unique locations to staging")
+
+    def _prepare_relations_table(self):
+        """Creates the `mb_relations_enhanced` table for use by other extractors."""
+        print("\n🤝 Preparing enhanced relations table...")
         self.conn.execute("DROP TABLE IF EXISTS mb_relations_enhanced")
-
         self.conn.execute("""
             CREATE TABLE mb_relations_enhanced AS
-            SELECT 
+            SELECT
                 CAST(mb.id AS UUID) as artist_mb_id,
                 mb.name as artist_name,
                 r.type as relation_type,
@@ -331,16 +389,21 @@ class Phase1FoundationExtractor:
             AND r.type IS NOT NULL
             AND r.type != ''
         """)
-
         relations_count = self.conn.execute(
             "SELECT COUNT(*) FROM mb_relations_enhanced").fetchone()[0]
         print(
             f"    ✅ Created enhanced relations table with {relations_count:,} relations")
 
+    def extract_roles_to_staging(self):
+        """Extract role data from relations to staging table."""
+        print("\n🎭 Extracting roles to staging...")
+
+        # NOTE: Assumes _prepare_relations_table() has been called.
+
         # Extract roles with categorization
         self.conn.execute("""
             WITH role_artist_samples AS (
-                SELECT 
+                SELECT
                     relation_type,
                     artist_mb_id,
                     artist_name,
@@ -350,7 +413,7 @@ class Phase1FoundationExtractor:
                 WHERE target_type IN ('recording', 'release', 'work')  -- Focus on music-related relations
             ),
             role_stats AS (
-                SELECT 
+                SELECT
                     relation_type,
                     COUNT(*) as usage_count,
                     COUNT(DISTINCT artist_mb_id) as unique_artists,
@@ -362,22 +425,22 @@ class Phase1FoundationExtractor:
                 AND COUNT(DISTINCT artist_mb_id) >= 5  -- Minimum artist diversity
             )
             INSERT INTO stage_role_extraction
-            SELECT 
+            SELECT
                 relation_type as role_name,
-                CASE 
-                    WHEN relation_type IN ('vocal', 'vocals', 'background vocals', 'lead vocals', 'harmony vocals') 
+                CASE
+                    WHEN relation_type IN ('vocal', 'vocals', 'background vocals', 'lead vocals', 'harmony vocals')
                         THEN 'Vocals'
-                    WHEN relation_type IN ('instrument', 'guitar', 'bass', 'drums', 'piano', 'keyboard', 'violin', 'saxophone', 'trumpet', 'flute') 
+                    WHEN relation_type IN ('instrument', 'guitar', 'bass', 'drums', 'piano', 'keyboard', 'violin', 'saxophone', 'trumpet', 'flute')
                         THEN 'Instrument Performance'
-                    WHEN relation_type IN ('producer', 'co-producer', 'executive producer', 'additional production') 
+                    WHEN relation_type IN ('producer', 'co-producer', 'executive producer', 'additional production')
                         THEN 'Production'
-                    WHEN relation_type IN ('engineer', 'recording engineer', 'mix engineer', 'mastering engineer', 'sound engineer') 
+                    WHEN relation_type IN ('engineer', 'recording engineer', 'mix engineer', 'mastering engineer', 'sound engineer')
                         THEN 'Engineering'
-                    WHEN relation_type IN ('composer', 'writer', 'lyricist', 'songwriter', 'arranger', 'orchestrator') 
+                    WHEN relation_type IN ('composer', 'writer', 'lyricist', 'songwriter', 'arranger', 'orchestrator')
                         THEN 'Composition'
-                    WHEN relation_type IN ('conductor', 'performing orchestra', 'performer', 'main performer') 
+                    WHEN relation_type IN ('conductor', 'performing orchestra', 'performer', 'main performer')
                         THEN 'Performance Direction'
-                    WHEN relation_type IN ('remixer', 'mix-DJ', 'DJ mix') 
+                    WHEN relation_type IN ('remixer', 'mix-DJ', 'DJ mix')
                         THEN 'Remix/DJ'
                     ELSE 'Other'
                 END as role_category,
@@ -397,8 +460,8 @@ class Phase1FoundationExtractor:
         # Show role category distribution
         category_dist = self.conn.execute("""
             SELECT role_category, COUNT(*) as role_types, SUM(usage_count) as total_usage
-            FROM stage_role_extraction 
-            GROUP BY role_category 
+            FROM stage_role_extraction
+            GROUP BY role_category
             ORDER BY total_usage DESC
         """).fetchall()
 
@@ -406,6 +469,69 @@ class Phase1FoundationExtractor:
         for category, types, usage in category_dist:
             print(
                 f"        {category}: {types} role types, {usage:,} total relations")
+
+    def extract_instruments_to_staging(self):
+        """Extract instrument data from relations to staging table."""
+        print("\n🎸 Extracting instruments to staging...")
+
+        # NOTE: Assumes _prepare_relations_table() has been called.
+        self.conn.execute("""
+            WITH instrument_artist_samples AS (
+                SELECT
+                    attr AS instrument_name,
+                    rel.artist_mb_id,
+                    rel.artist_name,
+                    ROW_NUMBER() OVER (PARTITION BY attr ORDER BY RANDOM()) as rn
+                FROM mb_relations_enhanced rel, UNNEST(rel.attributes_array) AS t(attr)
+                WHERE rel.relation_type IN ('instrument', 'vocal')
+                  AND rel.attributes_array IS NOT NULL
+                  AND array_length(rel.attributes_array) > 0
+            ),
+            instrument_stats AS (
+                SELECT
+                    instrument_name,
+                    COUNT(*) as usage_count,
+                    COUNT(DISTINCT artist_mb_id) as unique_artists,
+                    STRING_AGG(DISTINCT artist_name, '; ') FILTER (WHERE rn <= 3) as sample_artists
+                FROM instrument_artist_samples
+                GROUP BY instrument_name
+                HAVING COUNT(*) >= 5
+            )
+            INSERT INTO stage_instrument_extraction (instrument_name, instrument_category, usage_count, unique_artists, sample_artists)
+            SELECT
+                instrument_name,
+                CASE
+                    WHEN LOWER(instrument_name) LIKE '%vocal%' OR LOWER(instrument_name) LIKE '%sing%' OR LOWER(instrument_name) LIKE '%choir%' THEN 'Vocals'
+                    WHEN LOWER(instrument_name) LIKE '%guitar%' OR LOWER(instrument_name) LIKE '%bass%' OR LOWER(instrument_name) LIKE '%banjo%' OR LOWER(instrument_name) LIKE '%mandolin%' THEN 'Strings'
+                    WHEN LOWER(instrument_name) LIKE '%drum%' OR LOWER(instrument_name) LIKE '%percussion%' OR LOWER(instrument_name) LIKE '%timpani%' THEN 'Percussion'
+                    WHEN LOWER(instrument_name) LIKE '%keyboard%' OR LOWER(instrument_name) LIKE '%piano%' OR LOWER(instrument_name) LIKE '%organ%' OR LOWER(instrument_name) LIKE '%synthesizer%' THEN 'Keys'
+                    WHEN LOWER(instrument_name) LIKE '%trumpet%' OR LOWER(instrument_name) LIKE '%horn%' OR LOWER(instrument_name) LIKE '%trombone%' OR LOWER(instrument_name) LIKE '%tuba%' THEN 'Brass'
+                    WHEN LOWER(instrument_name) LIKE '%flute%' OR LOWER(instrument_name) LIKE '%clarinet%' OR LOWER(instrument_name) LIKE '%saxophone%' OR LOWER(instrument_name) LIKE '%oboe%' THEN 'Woodwind'
+                    WHEN LOWER(instrument_name) LIKE '%violin%' OR LOWER(instrument_name) LIKE '%viola%' OR LOWER(instrument_name) LIKE '%cello%' OR LOWER(instrument_name) LIKE '%double bass%' THEN 'Orchestra Strings'
+                    ELSE 'Other'
+                END as instrument_category,
+                usage_count,
+                unique_artists,
+                sample_artists
+            FROM instrument_stats
+            ORDER BY usage_count DESC
+        """)
+        instrument_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_instrument_extraction").fetchone()[0]
+        print(f"✅ Extracted {instrument_count:,} instruments to staging")
+
+        # Show category distribution
+        category_dist = self.conn.execute("""
+            SELECT instrument_category, COUNT(*) as instrument_types, SUM(usage_count) as total_usage
+            FROM stage_instrument_extraction
+            GROUP BY instrument_category
+            ORDER BY total_usage DESC
+        """).fetchall()
+
+        print("    Instrument category distribution:")
+        for category, types, usage in category_dist:
+            print(
+                f"        {category}: {types} instrument types, {usage:,} total relations")
 
     def validate_staging_data(self):
         """Validate extracted staging data before KB population."""
@@ -416,13 +542,13 @@ class Phase1FoundationExtractor:
             ("Genres with empty names",
              "SELECT COUNT(*) FROM stage_genre_extraction WHERE genre_name IS NULL OR genre_name = ''"),
             ("Locations with empty names",
-             "SELECT COUNT(*) FROM stage_location_extraction WHERE country_name IS NULL OR country_name = ''"),
+             "SELECT COUNT(*) FROM stage_location_extraction WHERE location_name IS NULL OR location_name = ''"),
             ("Roles with empty names",
              "SELECT COUNT(*) FROM stage_role_extraction WHERE role_name IS NULL OR role_name = ''"),
             ("High-quality genres (score ≥ 4)",
              "SELECT COUNT(*) FROM stage_genre_extraction WHERE quality_score >= 4"),
             ("Valid locations extracted",
-             "SELECT COUNT(*) FROM stage_location_extraction WHERE country_name IS NOT NULL"),
+             "SELECT COUNT(*) FROM stage_location_extraction WHERE location_name IS NOT NULL"),
             ("Production/Performance roles",
              "SELECT COUNT(*) FROM stage_role_extraction WHERE is_production_role = true OR is_performance_role = true")
         ]
@@ -455,14 +581,14 @@ class Phase1FoundationExtractor:
         print("    Populating kb_Genre...")
         self.conn.execute("""
             INSERT INTO kb_Genre (kb_id, name, description, mb_genre_id, updated_at)
-            SELECT 
+            SELECT
                 uuid() as kb_id,
                 genre_name as name,
                 COALESCE(genre_disambiguation, 'Genre with ' || total_votes || ' votes from ' || artist_count || ' artists') as description,
                 mb_genre_id,
                 CURRENT_TIMESTAMP as update_time
             FROM stage_genre_extraction
-            WHERE quality_score >= 3  -- Only high quality genres
+            WHERE quality_score >= 1  -- Only high quality genres
             ON CONFLICT (name) DO UPDATE SET
                 description = EXCLUDED.description,
                 mb_genre_id = EXCLUDED.mb_genre_id,
@@ -476,28 +602,30 @@ class Phase1FoundationExtractor:
         # 2. Populate kb_Location
         print("    Populating kb_Location...")
         self.conn.execute("""
-            INSERT INTO kb_Location (kb_id, country, city, state_or_region, updated_at)
-            SELECT 
+            INSERT INTO kb_Location (kb_id, mb_area_id, name, type, country_code, updated_at)
+            SELECT
                 uuid() as kb_id,
-                country_name as country,
-                city_name as city,
-                region_name as state_or_region,
-                CURRENT_TIMESTAMP as update_time
+                mb_area_id,
+                location_name as name,
+                location_type as type,
+                country_code,
+                CURRENT_TIMESTAMP as updated_at
             FROM stage_location_extraction
-            WHERE artist_count >= 2  -- Only locations with multiple artists
-            ON CONFLICT (city, state_or_region, country) DO UPDATE SET
-                updated_at = EXCLUDED.updated_at
+            WHERE artist_count >= 1 -- Ingest all locations found
+            ON CONFLICT (mb_area_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                type = EXCLUDED.type,
+                country_code = EXCLUDED.country_code,
+                updated_at = EXCLUDED.updated_at;
         """)
-
         location_inserted = self.conn.execute(
             "SELECT COUNT(*) FROM kb_Location").fetchone()[0]
         print(f"        ✅ {location_inserted:,} locations in kb_Location")
-
         # 3. Populate kb_Role
         print("    Populating kb_Role...")
         self.conn.execute("""
             INSERT INTO kb_Role (kb_id, name, category, description, updated_at)
-            SELECT 
+            SELECT
                 uuid() as kb_id,
                 role_name as name,
                 role_category::role_category,
@@ -511,9 +639,24 @@ class Phase1FoundationExtractor:
                 updated_at = EXCLUDED.updated_at
         """)
 
-        role_inserted = self.conn.execute(
-            "SELECT COUNT(*) FROM kb_Role").fetchone()[0]
-        print(f"        ✅ {role_inserted:,} roles in kb_Role")
+        # 4. Populate kb_Instrument
+        print("    Populating kb_Instrument...")
+        self.conn.execute("""
+            INSERT INTO kb_Instrument (kb_id, instrument_type, name, description, updated_at)
+            SELECT
+                uuid() as kb_id,
+                instrument_name as name,
+                instrument_category as instrument_type,
+                NULL as description,
+                CURRENT_TIMESTAMP as updated_at
+            FROM stage_instrument_extraction
+            WHERE usage_count >= 5  
+        """)
+
+        instrument_inserted = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Instrument").fetchone()[0]
+        print(
+            f"        ✅ {instrument_inserted:,} instruments in kb_Instrument")
 
         print(f"\n✅ Phase 1 foundation entities populated successfully!")
 
@@ -523,8 +666,9 @@ class Phase1FoundationExtractor:
         print(f"    Genres extracted: {genre_inserted:,}")
         print(f"    Locations extracted: {location_inserted:,}")
         print(f"    Roles extracted: {role_inserted:,}")
+        print(f"    Instruments extracted: {instrument_inserted:,}")
         print(
-            f"    Total foundation entities: {genre_inserted + location_inserted + role_inserted:,}")
+            f"    Total foundation entities: {genre_inserted + location_inserted + role_inserted + instrument_inserted:,}")
 
         # Note on location data enhancement potential
         print(f"\n💡 LOCATION DATA NOTES:")
@@ -534,13 +678,14 @@ class Phase1FoundationExtractor:
         print(f"    - Consider schema enhancement for country_code and mb_area_id fields")
 
     def cleanup_staging_tables(self, keep_staging: bool = True):
-        """Clean up staging tables (optional)."""
+        """Clean up staging tables(optional)."""
         if not keep_staging:
             print("\n🧹 Cleaning up staging tables...")
             staging_tables = [
                 'stage_genre_extraction',
                 'stage_location_extraction',
                 'stage_role_extraction',
+                'stage_instrument_extraction',
                 'mb_relations_enhanced'
             ]
 
@@ -553,6 +698,7 @@ class Phase1FoundationExtractor:
             print(f"    - stage_genre_extraction")
             print(f"    - stage_location_extraction")
             print(f"    - stage_role_extraction")
+            print(f"    - stage_instrument_extraction")
             print(f"    - mb_relations_enhanced")
 
     def run_full_extraction(self, cleanup: bool = False):
@@ -568,13 +714,15 @@ class Phase1FoundationExtractor:
                 return False
 
             # Create staging and extract
-            # self.create_staging_tables()
-            # self.extract_genres_to_staging()
-            # self.extract_locations_to_staging()
-            # self.extract_roles_to_staging()
+            self.create_staging_tables()
+            self.extract_genres_to_staging()
+            self.extract_locations_to_staging()
+            # self._prepare_relations_table()
+            self.extract_instruments_to_staging()
+            self.extract_roles_to_staging()
 
             # Validate and populate
-            self.validate_staging_data()
+            # self.validate_staging_data()
             self.populate_kb_tables()
 
             # Cleanup
