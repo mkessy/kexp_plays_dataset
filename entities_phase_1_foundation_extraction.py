@@ -1,545 +1,618 @@
 #!/usr/bin/env python3
 """
-Smart Relations Extraction - Separate Tables Approach
-Create separate tables for different types of MB relationships to inspect and extract properly.
+KEXP Knowledge Base - Phase 1 Foundation Entities Extraction
+Corrected implementation based on project analysis and data structure insights.
 """
 
 import duckdb
 import os
+from typing import Optional
+import sys
 
 # Configuration
 DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
 
 
-def connect_db() -> duckdb.DuckDBPyConnection:
-    """Connect to DuckDB database."""
-    try:
-        conn = duckdb.connect(DB_PATH)
-        print(f"✅ Connected to database: {DB_PATH}")
-        return conn
-    except Exception as e:
-        print(f"❌ Failed to connect to database: {e}")
-        raise
+class Phase1FoundationExtractor:
+    """Handles extraction of foundation entities from MusicBrainz raw data."""
 
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self.conn: Optional[duckdb.DuckDBPyConnection] = None
 
-def create_basic_relations_table(conn: duckdb.DuckDBPyConnection):
-    """Create a basic flattened relations table first."""
-    print("\n🔧 Creating basic relations table...")
-    conn.execute("DROP TABLE IF EXISTS mb_relations_basic")
-    conn.execute("""
-        CREATE TABLE mb_relations_basic AS
-        SELECT 
-            CAST(mb.id AS UUID) as artist_mb_id,
-            mb.name as artist_name,
-            r.type as relation_type,
-            r."target-type" as target_type,
-            r.begin as begin_date,
-            r.end as end_date,
-            r."target-credit" as target_credit,
-            r."source-credit" as source_credit
-        FROM mb_artists_raw mb, UNNEST(mb.relations) AS t(r)
-        WHERE CAST(mb.id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
-    """)
+    def connect(self) -> duckdb.DuckDBPyConnection:
+        """Connect to database with error handling."""
+        try:
+            self.conn = duckdb.connect(self.db_path)
+            print(f"✅ Connected to database: {self.db_path}")
+            return self.conn
+        except Exception as e:
+            print(f"❌ Failed to connect to database: {e}")
+            raise
 
-    count = conn.execute(
-        "SELECT COUNT(*) FROM mb_relations_basic").fetchone()[0]
-    print(f"✅ Created basic relations table with {count:,} records")
+    def validate_prerequisites(self) -> bool:
+        """Validate that required tables exist before extraction."""
+        print("\n🔍 Validating prerequisites...")
 
-    # Show relation type distribution
-    print("\n📊 Relation type distribution:")
-    results = conn.execute("""
-        SELECT relation_type, target_type, COUNT(*) as count
-        FROM mb_relations_basic 
-        GROUP BY relation_type, target_type 
-        ORDER BY count DESC 
-        LIMIT 10
-    """).fetchall()
+        required_tables = [
+            'mb_artists_raw',
+            'dim_artists_master',
+            'kb_Genre',
+            'kb_Location',
+            'kb_Role'
+        ]
 
-    for rel_type, target_type, count in results:
-        print(f"   {rel_type} -> {target_type}: {count:,}")
+        for table in required_tables:
+            try:
+                count = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                print(f"    ✅ {table}: {count:,} records")
+            except Exception as e:
+                print(f"    ❌ Missing table {table}: {e}")
+                return False
 
-
-def create_instrument_relations_table(conn: duckdb.DuckDBPyConnection):
-    """Create dedicated table for instrument relationships."""
-    print("\n🎸 Creating instrument relations table...")
-
-    conn.execute("DROP TABLE IF EXISTS mb_instrument_relations")
-    conn.execute("""
-        CREATE TABLE mb_instrument_relations AS
-        SELECT 
-            CAST(mb.id AS UUID) as artist_mb_id,
-            mb.name as artist_name,
-            r.type as relation_type,
-            r."target-type" as target_type,
-            r.instrument as instrument_data
-        FROM mb_artists_raw mb, UNNEST(mb.relations) AS t(r)
-        WHERE CAST(mb.id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
-          AND r.type = 'instrument'
-          AND r.instrument IS NOT NULL
-    """)
-
-    count = conn.execute(
-        "SELECT COUNT(*) FROM mb_instrument_relations").fetchone()[0]
-    print(f"✅ Created instrument relations table with {count:,} records")
-
-    if count > 0:
-        # Show sample instrument data
-        print("\n🔍 Sample instrument data:")
-        sample = conn.execute("""
-            SELECT 
-                artist_name,
-                instrument_data.name as instrument_name,
-                instrument_data.type as instrument_type
-            FROM mb_instrument_relations 
-            WHERE instrument_data.name IS NOT NULL
-            LIMIT 5
-        """).fetchall()
-
-        for artist, instrument, inst_type in sample:
-            print(f"   {artist} plays {instrument} ({inst_type})")
-
-
-def create_genre_relations_table(conn: duckdb.DuckDBPyConnection):
-    """Create dedicated table for genre data."""
-    print("\n🎵 Creating genre relations table...")
-
-    conn.execute("DROP TABLE IF EXISTS mb_genre_relations")
-    conn.execute("""
-        CREATE TABLE mb_genre_relations AS
-        SELECT 
-            CAST(mb.id AS UUID) as artist_mb_id,
-            mb.name as artist_name,
-            g as genre_data
-        FROM mb_artists_raw mb, UNNEST(mb.genres) AS t(g)
-        WHERE CAST(mb.id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
-          AND g.name IS NOT NULL
-    """)
-
-    count = conn.execute(
-        "SELECT COUNT(*) FROM mb_genre_relations").fetchone()[0]
-    print(f"✅ Created genre relations table with {count:,} records")
-
-    if count > 0:
-        # Show top genres
-        print("\n🔍 Top genres:")
-        top_genres = conn.execute("""
-            SELECT 
-                genre_data.name as genre_name,
-                COUNT(DISTINCT artist_mb_id) as artist_count,
-                SUM(genre_data.count) as total_votes
-            FROM mb_genre_relations 
-            GROUP BY genre_data.name, genre_data.id
-            ORDER BY artist_count DESC 
-            LIMIT 5
-        """).fetchall()
-
-        for genre, artists, votes in top_genres:
-            print(f"   {genre}: {artists} artists ({votes} votes)")
-
-
-def create_location_relations_table(conn: duckdb.DuckDBPyConnection):
-    """Create dedicated table for location data."""
-    print("\n🌍 Creating location relations table...")
-
-    conn.execute("DROP TABLE IF EXISTS mb_location_relations")
-    conn.execute("""
-        CREATE TABLE mb_location_relations AS
-        SELECT 
-            CAST(mb.id AS UUID) as artist_mb_id,
-            mb.name as artist_name,
-            'main_area' as location_type,
-            mb.area as location_data
-        FROM mb_artists_raw mb
-        WHERE CAST(mb.id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
-          AND mb.area IS NOT NULL
-          AND mb.area.name IS NOT NULL
-        
-        UNION ALL
-        
-        SELECT 
-            CAST(mb.id AS UUID) as artist_mb_id,
-            mb.name as artist_name,
-            'begin_area' as location_type,
-            mb."begin-area" as location_data
-        FROM mb_artists_raw mb
-        WHERE CAST(mb.id AS UUID) IN (SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL)
-          AND mb."begin-area" IS NOT NULL
-          AND mb."begin-area".name IS NOT NULL
-    """)
-
-    count = conn.execute(
-        "SELECT COUNT(*) FROM mb_location_relations").fetchone()[0]
-    print(f"✅ Created location relations table with {count:,} records")
-
-    if count > 0:
-        # Show top locations
-        print("\n🔍 Top locations:")
-        top_locations = conn.execute("""
-            SELECT 
-                location_data.name as location_name,
-                COUNT(DISTINCT artist_mb_id) as artist_count
-            FROM mb_location_relations 
-            GROUP BY location_data.name, location_data.id
-            ORDER BY artist_count DESC 
-            LIMIT 5
-        """).fetchall()
-
-        for location, artists in top_locations:
-            print(f"   {location}: {artists} artists")
-
-
-def analyze_instrument_data(conn: duckdb.DuckDBPyConnection):
-    """Analyze the instrument data structure."""
-    print("\n🔍 ANALYZING INSTRUMENT DATA STRUCTURE")
-    print("=" * 50)
-
-    # Check if we have any instrument relations
-    count = conn.execute(
-        "SELECT COUNT(*) FROM mb_instrument_relations").fetchone()[0]
-    if count == 0:
-        print("❌ No instrument relations found!")
-
-        # Let's check what relation types we DO have
-        print("\n🔍 Available relation types:")
-        rel_types = conn.execute("""
-            SELECT relation_type, COUNT(*) as count
-            FROM mb_relations_basic 
-            GROUP BY relation_type 
-            ORDER BY count DESC 
-            LIMIT 20
-        """).fetchall()
-
-        for rel_type, count in rel_types:
-            print(f"   {rel_type}: {count:,}")
-
-        # Check if 'instrument' relations exist at all
-        instrument_check = conn.execute("""
-            SELECT COUNT(*) 
-            FROM mb_relations_basic 
-            WHERE relation_type = 'instrument'
+        # Check KEXP-MB connection coverage
+        mb_coverage = self.conn.execute("""
+            SELECT COUNT(DISTINCT mb_id) 
+            FROM dim_artists_master 
+            WHERE mb_id IS NOT NULL
         """).fetchone()[0]
 
-        print(f"\n🔍 Relations with type 'instrument': {instrument_check:,}")
+        print(f"    ✅ KEXP artists with MB IDs: {mb_coverage:,}")
 
-        # Let's see what the actual instrument data looks like
-        print("\n🔍 Sample relations with instrument in name:")
-        samples = conn.execute("""
-            SELECT relation_type, target_type, COUNT(*) as count
-            FROM mb_relations_basic 
-            WHERE relation_type LIKE '%instrument%' 
-               OR relation_type LIKE '%guitar%'
-               OR relation_type LIKE '%piano%'
-               OR relation_type LIKE '%drum%'
-            GROUP BY relation_type, target_type
-            ORDER BY count DESC
-            LIMIT 10
-        """).fetchall()
+        if mb_coverage < 50000:
+            print("    ⚠️  Warning: Low MB ID coverage. Proceeding anyway.")
 
-        for rel_type, target_type, count in samples:
-            print(f"   {rel_type} -> {target_type}: {count:,}")
+        return True
 
-    else:
-        print(f"✅ Found {count:,} instrument relations")
+    def create_staging_tables(self):
+        """Create staging tables for extraction validation."""
+        print("\n🏗️  Creating staging extraction tables...")
 
-        # Analyze instrument data structure
-        print("\n🔍 Instrument data structure:")
-        sample_data = conn.execute("""
-            SELECT 
-                instrument_data.name,
-                instrument_data.type,
-                instrument_data.description,
-                COUNT(*) as usage_count
-            FROM mb_instrument_relations 
-            WHERE instrument_data.name IS NOT NULL
-            GROUP BY 
-                instrument_data.name,
-                instrument_data.type,
-                instrument_data.description
-            ORDER BY usage_count DESC
-            LIMIT 10
-        """).fetchall()
+        # Drop existing staging tables
+        staging_tables = [
+            'stage_genre_extraction',
+            'stage_location_extraction',
+            'stage_role_extraction'
+        ]
 
-        for name, inst_type, desc, count in sample_data:
-            print(f"   {name} ({inst_type}): {count:,} usages")
-            if desc:
-                print(f"     Description: {desc}")
+        for table in staging_tables:
+            self.conn.execute(f"DROP TABLE IF EXISTS {table}")
 
-
-def create_final_extraction_tables(conn: duckdb.DuckDBPyConnection):
-    """Create the final extraction tables based on our analysis."""
-    print("\n🏗️  Creating final extraction tables...")
-
-    # Drop existing extraction tables
-    tables = ['extract_instruments', 'extract_roles',
-              'extract_genres', 'extract_locations']
-    for table in tables:
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-
-    # Create extraction tables
-    conn.execute("""
-        CREATE TABLE extract_instruments (
-            extract_id INTEGER,
-            instrument_name VARCHAR,
-            mb_instrument_id UUID,
-            instrument_type VARCHAR,
-            description VARCHAR,
-            usage_count INTEGER,
-            sample_artists VARCHAR
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE extract_roles (
-            extract_id INTEGER,
-            role_name VARCHAR,
-            role_category VARCHAR,
-            usage_count INTEGER,
-            sample_relations VARCHAR,
-            description VARCHAR
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE extract_genres (
-            extract_id INTEGER,
-            genre_name VARCHAR,
-            mb_genre_id UUID,
-            vote_count BIGINT,
-            artist_count INTEGER,
-            sample_artists VARCHAR,
-            disambiguation VARCHAR
-        )
-    """)
-
-    conn.execute("""
-        CREATE TABLE extract_locations (
-            extract_id INTEGER,
-            country_name VARCHAR,
-            country_code VARCHAR(10),
-            city_name VARCHAR,
-            region_name VARCHAR,
-            mb_area_id UUID,
-            usage_count INTEGER,
-            sample_artists VARCHAR,
-            has_coordinates BOOLEAN,
-            latitude DECIMAL(9,6),
-            longitude DECIMAL(9,6)
-        )
-    """)
-
-    print("✅ Extraction tables created")
-
-
-def extract_from_specialized_tables(conn: duckdb.DuckDBPyConnection):
-    """Extract entities from the specialized tables."""
-    print("\n📊 EXTRACTING FROM SPECIALIZED TABLES")
-    print("=" * 50)
-
-    # Extract instruments (if any exist)
-    instrument_count = conn.execute(
-        "SELECT COUNT(*) FROM mb_instrument_relations").fetchone()[0]
-    if instrument_count > 0:
-        print("\n🎸 Extracting instruments...")
-        conn.execute("""
-            INSERT INTO extract_instruments
-            SELECT 
-                row_number() OVER (ORDER BY usage_count DESC) as extract_id,
-                instrument_name,
-                mb_instrument_id,
-                instrument_type,
-                description,
-                usage_count,
-                sample_artists
-            FROM (
-                SELECT 
-                    instrument_data.name as instrument_name,
-                    instrument_data.id as mb_instrument_id,
-                    instrument_data.type as instrument_type,
-                    instrument_data.description as description,
-                    COUNT(*) as usage_count,
-                    string_agg(DISTINCT artist_name, ', ') as sample_artists
-                FROM mb_instrument_relations 
-                WHERE instrument_data.name IS NOT NULL
-                GROUP BY 
-                    instrument_data.name,
-                    instrument_data.id,
-                    instrument_data.type,
-                    instrument_data.description
-                HAVING COUNT(*) >= 3
-            ) instruments
-            ORDER BY usage_count DESC
+        # Create staging tables with comprehensive metadata
+        self.conn.execute("""
+            CREATE TABLE stage_genre_extraction (
+                mb_genre_id UUID,
+                genre_name VARCHAR NOT NULL,
+                genre_disambiguation VARCHAR,
+                total_votes BIGINT,
+                artist_count INTEGER,
+                sample_artists TEXT,
+                quality_score INTEGER
+            )
         """)
 
-        extracted = conn.execute(
-            "SELECT COUNT(*) FROM extract_instruments").fetchone()[0]
-        print(f"✅ Extracted {extracted:,} unique instruments")
-    else:
-        print("⚠️  No instrument data found to extract")
+        self.conn.execute("""
+            CREATE TABLE stage_location_extraction (
+                mb_area_id UUID,
+                location_type VARCHAR, -- 'main_area' or 'begin_area'
+                country_name VARCHAR,
+                country_code VARCHAR,
+                city_name VARCHAR,
+                region_name VARCHAR,
+                artist_count INTEGER,
+                coordinates_available BOOLEAN,
+                latitude DECIMAL(9,6),
+                longitude DECIMAL(9,6)
+            )
+        """)
 
-    # Extract roles
-    print("\n🎭 Extracting roles...")
-    conn.execute("""
-        INSERT INTO extract_roles
-        SELECT 
-            row_number() OVER (ORDER BY usage_count DESC) as extract_id,
-            relation_type as role_name,
-            CASE 
-                WHEN relation_type IN ('vocal', 'lead vocals', 'background vocals', 'choir vocals') 
-                    THEN 'Vocals'
-                WHEN relation_type LIKE '%guitar%' OR relation_type LIKE '%bass%' 
-                    THEN 'Strings'
-                WHEN relation_type LIKE '%drum%' OR relation_type LIKE '%percussion%' 
-                    THEN 'Percussion'
-                WHEN relation_type LIKE '%keyboard%' OR relation_type LIKE '%piano%' OR relation_type LIKE '%organ%' 
-                    THEN 'Keys'
-                WHEN relation_type IN ('producer', 'co-producer', 'executive producer') 
-                    THEN 'Production'
-                WHEN relation_type IN ('engineer', 'recording', 'mix', 'mastering', 'sound') 
-                    THEN 'Engineering'
-                WHEN relation_type IN ('composer', 'writer', 'lyricist', 'arranger', 'orchestrator') 
-                    THEN 'Composition'
-                WHEN relation_type = 'member of band' 
-                    THEN 'Membership'
-                WHEN relation_type IN ('conductor', 'performing orchestra', 'performer', 'main performer') 
-                    THEN 'Performance'
-                ELSE 'Other'
-            END as role_category,
-            usage_count,
-            sample_relations,
-            'Extracted from MusicBrainz relationship: ' || relation_type as description
-        FROM (
+        self.conn.execute("""
+            CREATE TABLE stage_role_extraction (
+                role_name VARCHAR NOT NULL,
+                role_category VARCHAR,
+                usage_count INTEGER,
+                unique_artists INTEGER,
+                unique_recordings INTEGER,
+                sample_relations TEXT,
+                is_production_role BOOLEAN,
+                is_performance_role BOOLEAN
+            )
+        """)
+
+        print("✅ Staging tables created")
+
+    def extract_genres_to_staging(self):
+        """Extract genre data to staging table with quality filtering."""
+        print("\n🎵 Extracting genres to staging...")
+
+        # Extract genres with vote count and artist coverage
+        self.conn.execute("""
+            WITH genre_artist_samples AS (
+                SELECT 
+                    g.id as genre_id,
+                    g.name as genre_name,
+                    g.disambiguation as genre_disambiguation,
+                    g.count as total_votes,
+                    mb.name as artist_name,
+                    ROW_NUMBER() OVER (PARTITION BY g.id ORDER BY g.count DESC, mb.name) as rn
+                FROM mb_artists_raw mb, UNNEST(mb.genres) AS t(g)
+                WHERE CAST(mb.id AS UUID) IN (
+                    SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL
+                )
+                AND g.name IS NOT NULL
+                AND g.name != ''
+            ),
+            genre_stats AS (
+                SELECT 
+                    genre_id,
+                    genre_name,
+                    genre_disambiguation,
+                    total_votes,
+                    COUNT(DISTINCT artist_name) as artist_count,
+                    STRING_AGG(artist_name, '; ') FILTER (WHERE rn <= 3) as sample_artists
+                FROM genre_artist_samples
+                GROUP BY genre_id, genre_name, genre_disambiguation, total_votes
+                HAVING total_votes >= 5  -- Minimum vote threshold
+                AND COUNT(DISTINCT artist_name) >= 2  -- Minimum artist coverage
+            )
+            INSERT INTO stage_genre_extraction
             SELECT 
-                relation_type,
-                COUNT(*) as usage_count,
-                string_agg(DISTINCT target_type, ', ') as sample_relations
-            FROM mb_relations_basic
-            WHERE target_type != 'url'
-            GROUP BY relation_type
-            HAVING COUNT(*) >= 5
-        ) roles
-        ORDER BY usage_count DESC
-    """)
-
-    role_count = conn.execute(
-        "SELECT COUNT(*) FROM extract_roles").fetchone()[0]
-    print(f"✅ Extracted {role_count:,} unique roles")
-
-    # Extract genres
-    print("\n🎵 Extracting genres...")
-    conn.execute("""
-        INSERT INTO extract_genres
-        SELECT 
-            row_number() OVER (ORDER BY artist_count DESC, vote_count DESC) as extract_id,
-            genre_name,
-            mb_genre_id,
-            vote_count,
-            artist_count,
-            sample_artists,
-            disambiguation
-        FROM (
-            SELECT 
-                genre_data.name as genre_name,
-                genre_data.id as mb_genre_id,
-                SUM(genre_data.count) as vote_count,
-                COUNT(DISTINCT artist_mb_id) as artist_count,
-                string_agg(DISTINCT artist_name, ', ') as sample_artists,
-                genre_data.disambiguation as disambiguation
-            FROM mb_genre_relations 
-            GROUP BY 
-                genre_data.name,
-                genre_data.id,
-                genre_data.disambiguation
-            HAVING COUNT(DISTINCT artist_mb_id) >= 3
-        ) genres
-        ORDER BY artist_count DESC, vote_count DESC
-    """)
-
-    genre_count = conn.execute(
-        "SELECT COUNT(*) FROM extract_genres").fetchone()[0]
-    print(f"✅ Extracted {genre_count:,} unique genres")
-
-    # Extract locations
-    print("\n🌍 Extracting locations...")
-    conn.execute("""
-        INSERT INTO extract_locations
-        SELECT 
-            row_number() OVER (ORDER BY usage_count DESC) as extract_id,
-            location_name as country_name,
-            country_code,
-            NULL as city_name,
-            NULL as region_name,
-            mb_area_id,
-            usage_count,
-            sample_artists,
-            FALSE as has_coordinates,
-            NULL as latitude,
-            NULL as longitude
-        FROM (
-            SELECT 
-                location_data.name as location_name,
-                location_data.id as mb_area_id,
+                CAST(genre_id AS UUID) as mb_genre_id,
+                genre_name,
+                genre_disambiguation,
+                total_votes,
+                artist_count,
+                sample_artists,
                 CASE 
-                    WHEN array_length(location_data."iso-3166-1-codes") > 0 
-                    THEN location_data."iso-3166-1-codes"[1]
-                    WHEN location_data.name = 'United States' THEN 'US'
-                    WHEN location_data.name = 'United Kingdom' THEN 'GB'
-                    WHEN location_data.name = 'Germany' THEN 'DE'
-                    ELSE NULL
-                END as country_code,
-                COUNT(DISTINCT artist_mb_id) as usage_count,
-                string_agg(DISTINCT artist_name, ', ') as sample_artists
-            FROM mb_location_relations 
-            GROUP BY 
-                location_data.name,
-                location_data.id,
-                location_data."iso-3166-1-codes"
-            HAVING COUNT(DISTINCT artist_mb_id) >= 2
-        ) locations
-        ORDER BY usage_count DESC
-    """)
+                    WHEN total_votes >= 50 AND artist_count >= 10 THEN 5
+                    WHEN total_votes >= 20 AND artist_count >= 5 THEN 4
+                    WHEN total_votes >= 10 AND artist_count >= 3 THEN 3
+                    WHEN total_votes >= 5 AND artist_count >= 2 THEN 2
+                    ELSE 1
+                END as quality_score
+            FROM genre_stats
+        """)
 
-    location_count = conn.execute(
-        "SELECT COUNT(*) FROM extract_locations").fetchone()[0]
-    print(f"✅ Extracted {location_count:,} unique locations")
+        genre_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_genre_extraction").fetchone()[0]
+        print(f"✅ Extracted {genre_count:,} quality genres to staging")
+
+        # Show quality distribution
+        quality_dist = self.conn.execute("""
+            SELECT quality_score, COUNT(*) as count, 
+                   ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 1) as percent
+            FROM stage_genre_extraction 
+            GROUP BY quality_score 
+            ORDER BY quality_score DESC
+        """).fetchall()
+
+        print("    Quality distribution:")
+        for score, count, percent in quality_dist:
+            print(f"        Score {score}: {count:,} genres ({percent}%)")
+
+    def extract_locations_to_staging(self):
+        """Extract location data to staging table."""
+        print("\n🌍 Extracting locations to staging...")
+
+        # Extract main areas and begin areas with ISO codes (now confirmed available)
+        self.conn.execute("""
+            INSERT INTO stage_location_extraction
+            SELECT 
+                CAST(mb.area.id AS UUID) as mb_area_id,
+                'main_area' as location_type,
+                mb.area.name as country_name,
+                CASE 
+                    WHEN mb.area."iso-3166-1-codes" IS NOT NULL 
+                         AND array_length(mb.area."iso-3166-1-codes") > 0
+                    THEN mb.area."iso-3166-1-codes"[1]
+                    ELSE NULL 
+                END as country_code,
+                NULL as city_name,  -- Could be enhanced later with hierarchy parsing
+                CASE 
+                    WHEN mb.area."iso-3166-2-codes" IS NOT NULL 
+                         AND array_length(mb.area."iso-3166-2-codes") > 0
+                    THEN mb.area."iso-3166-2-codes"[1]
+                    ELSE NULL 
+                END as region_name,
+                COUNT(DISTINCT CAST(mb.id AS UUID)) as artist_count,
+                FALSE as coordinates_available,  -- Confirmed not available
+                NULL as latitude,
+                NULL as longitude
+            FROM mb_artists_raw mb
+            WHERE CAST(mb.id AS UUID) IN (
+                SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL
+            )
+            AND mb.area IS NOT NULL
+            AND mb.area.name IS NOT NULL
+            AND mb.area.name != ''
+            GROUP BY mb.area.id, mb.area.name, mb.area."iso-3166-1-codes", mb.area."iso-3166-2-codes"
+            HAVING COUNT(DISTINCT CAST(mb.id AS UUID)) >= 1
+            
+            UNION ALL
+            
+            SELECT 
+                CAST(mb."begin-area".id AS UUID) as mb_area_id,
+                'begin_area' as location_type,
+                mb."begin-area".name as country_name,
+                CASE 
+                    WHEN mb."begin-area"."iso-3166-1-codes" IS NOT NULL 
+                         AND array_length(mb."begin-area"."iso-3166-1-codes") > 0
+                    THEN mb."begin-area"."iso-3166-1-codes"[1]
+                    ELSE NULL 
+                END as country_code,
+                NULL as city_name,
+                CASE 
+                    WHEN mb."begin-area"."iso-3166-2-codes" IS NOT NULL 
+                         AND array_length(mb."begin-area"."iso-3166-2-codes") > 0
+                    THEN mb."begin-area"."iso-3166-2-codes"[1]
+                    ELSE NULL 
+                END as region_name,
+                COUNT(DISTINCT CAST(mb.id AS UUID)) as artist_count,
+                FALSE as coordinates_available,
+                NULL as latitude,
+                NULL as longitude
+            FROM mb_artists_raw mb
+            WHERE CAST(mb.id AS UUID) IN (
+                SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL
+            )
+            AND mb."begin-area" IS NOT NULL
+            AND mb."begin-area".name IS NOT NULL
+            AND mb."begin-area".name != ''
+            GROUP BY mb."begin-area".id, mb."begin-area".name, mb."begin-area"."iso-3166-1-codes", mb."begin-area"."iso-3166-2-codes"
+            HAVING COUNT(DISTINCT CAST(mb.id AS UUID)) >= 1
+        """)
+
+        # Deduplicate locations by mb_area_id, keeping the one with higher artist_count
+        self.conn.execute("""
+            WITH location_ranked AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY mb_area_id 
+                        ORDER BY artist_count DESC, location_type
+                    ) as rn
+                FROM stage_location_extraction
+            )
+            DELETE FROM stage_location_extraction
+            WHERE (mb_area_id, location_type, artist_count) NOT IN (
+                SELECT mb_area_id, location_type, artist_count
+                FROM location_ranked
+                WHERE rn = 1
+            )
+        """)
+
+        location_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_location_extraction").fetchone()[0]
+        print(f"✅ Extracted {location_count:,} unique locations to staging")
+
+        # Show top locations with enhanced data
+        top_locations = self.conn.execute("""
+            SELECT country_name, country_code, region_name, artist_count
+            FROM stage_location_extraction 
+            ORDER BY artist_count DESC 
+            LIMIT 10
+        """).fetchall()
+
+        print("    Top locations by artist count:")
+        for country, code, region, count in top_locations:
+            code_display = f" ({code})" if code else ""
+            region_display = f", {region}" if region else ""
+            print(
+                f"        {country}{code_display}{region_display}: {count:,} artists")
+
+    def extract_roles_to_staging(self):
+        """Extract role data from relations to staging table."""
+        print("\n🎭 Extracting roles to staging...")
+
+        # Create enhanced relations table if it doesn't exist
+        print("    Creating enhanced relations analysis...")
+        self.conn.execute("DROP TABLE IF EXISTS mb_relations_enhanced")
+
+        self.conn.execute("""
+            CREATE TABLE mb_relations_enhanced AS
+            SELECT 
+                CAST(mb.id AS UUID) as artist_mb_id,
+                mb.name as artist_name,
+                r.type as relation_type,
+                r."target-type" as target_type,
+                r.attributes as attributes_raw,
+                CASE
+                    WHEN r.attributes IS NULL THEN []::VARCHAR[]
+                    WHEN typeof(r.attributes) = 'VARCHAR[][]' THEN r.attributes[1]
+                    WHEN typeof(r.attributes) = 'VARCHAR[]' THEN r.attributes
+                    ELSE []::VARCHAR[]
+                END as attributes_array,
+                r.begin as begin_date,
+                r.end as end_date
+            FROM mb_artists_raw mb, UNNEST(mb.relations) AS t(r)
+            WHERE CAST(mb.id AS UUID) IN (
+                SELECT mb_id FROM dim_artists_master WHERE mb_id IS NOT NULL
+            )
+            AND r.type IS NOT NULL
+            AND r.type != ''
+        """)
+
+        relations_count = self.conn.execute(
+            "SELECT COUNT(*) FROM mb_relations_enhanced").fetchone()[0]
+        print(
+            f"    ✅ Created enhanced relations table with {relations_count:,} relations")
+
+        # Extract roles with categorization
+        self.conn.execute("""
+            WITH role_artist_samples AS (
+                SELECT 
+                    relation_type,
+                    artist_mb_id,
+                    artist_name,
+                    target_type,
+                    ROW_NUMBER() OVER (PARTITION BY relation_type ORDER BY RANDOM()) as rn
+                FROM mb_relations_enhanced
+                WHERE target_type IN ('recording', 'release', 'work')  -- Focus on music-related relations
+            ),
+            role_stats AS (
+                SELECT 
+                    relation_type,
+                    COUNT(*) as usage_count,
+                    COUNT(DISTINCT artist_mb_id) as unique_artists,
+                    COUNT(DISTINCT CASE WHEN target_type = 'recording' THEN 1 END) as unique_recordings,
+                    STRING_AGG(DISTINCT artist_name, '; ') FILTER (WHERE rn <= 3) as sample_relations
+                FROM role_artist_samples
+                GROUP BY relation_type
+                HAVING COUNT(*) >= 50  -- Minimum usage threshold
+                AND COUNT(DISTINCT artist_mb_id) >= 5  -- Minimum artist diversity
+            )
+            INSERT INTO stage_role_extraction
+            SELECT 
+                relation_type as role_name,
+                CASE 
+                    WHEN relation_type IN ('vocal', 'vocals', 'background vocals', 'lead vocals', 'harmony vocals') 
+                        THEN 'Vocals'
+                    WHEN relation_type IN ('instrument', 'guitar', 'bass', 'drums', 'piano', 'keyboard', 'violin', 'saxophone', 'trumpet', 'flute') 
+                        THEN 'Instrument Performance'
+                    WHEN relation_type IN ('producer', 'co-producer', 'executive producer', 'additional production') 
+                        THEN 'Production'
+                    WHEN relation_type IN ('engineer', 'recording engineer', 'mix engineer', 'mastering engineer', 'sound engineer') 
+                        THEN 'Engineering'
+                    WHEN relation_type IN ('composer', 'writer', 'lyricist', 'songwriter', 'arranger', 'orchestrator') 
+                        THEN 'Composition'
+                    WHEN relation_type IN ('conductor', 'performing orchestra', 'performer', 'main performer') 
+                        THEN 'Performance Direction'
+                    WHEN relation_type IN ('remixer', 'mix-DJ', 'DJ mix') 
+                        THEN 'Remix/DJ'
+                    ELSE 'Other'
+                END as role_category,
+                usage_count,
+                unique_artists,
+                unique_recordings,
+                sample_relations,
+                relation_type IN ('producer', 'co-producer', 'executive producer', 'engineer', 'recording engineer', 'mix engineer', 'mastering engineer') as is_production_role,
+                relation_type IN ('instrument', 'vocal', 'vocals', 'performer', 'main performer', 'conducting') as is_performance_role
+            FROM role_stats
+        """)
+
+        role_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_role_extraction").fetchone()[0]
+        print(f"✅ Extracted {role_count:,} roles to staging")
+
+        # Show role category distribution
+        category_dist = self.conn.execute("""
+            SELECT role_category, COUNT(*) as role_types, SUM(usage_count) as total_usage
+            FROM stage_role_extraction 
+            GROUP BY role_category 
+            ORDER BY total_usage DESC
+        """).fetchall()
+
+        print("    Role category distribution:")
+        for category, types, usage in category_dist:
+            print(
+                f"        {category}: {types} role types, {usage:,} total relations")
+
+    def validate_staging_data(self):
+        """Validate extracted staging data before KB population."""
+        print("\n✅ Validating staging data...")
+
+        # Check for data quality issues
+        validation_checks = [
+            ("Genres with empty names",
+             "SELECT COUNT(*) FROM stage_genre_extraction WHERE genre_name IS NULL OR genre_name = ''"),
+            ("Locations with empty names",
+             "SELECT COUNT(*) FROM stage_location_extraction WHERE country_name IS NULL OR country_name = ''"),
+            ("Roles with empty names",
+             "SELECT COUNT(*) FROM stage_role_extraction WHERE role_name IS NULL OR role_name = ''"),
+            ("High-quality genres (score ≥ 4)",
+             "SELECT COUNT(*) FROM stage_genre_extraction WHERE quality_score >= 4"),
+            ("Valid locations extracted",
+             "SELECT COUNT(*) FROM stage_location_extraction WHERE country_name IS NOT NULL"),
+            ("Production/Performance roles",
+             "SELECT COUNT(*) FROM stage_role_extraction WHERE is_production_role = true OR is_performance_role = true")
+        ]
+
+        for check_name, query in validation_checks:
+            count = self.conn.execute(query).fetchone()[0]
+            status = "✅" if count > 0 or "empty" in check_name.lower() else "⚠️"
+            print(f"    {status} {check_name}: {count:,}")
+
+        # Check for duplicates
+        dup_checks = [
+            ("Duplicate genre names",
+             "SELECT COUNT(*) - COUNT(DISTINCT genre_name) FROM stage_genre_extraction"),
+            ("Duplicate location areas",
+             "SELECT COUNT(*) - COUNT(DISTINCT mb_area_id) FROM stage_location_extraction"),
+            ("Duplicate role names",
+             "SELECT COUNT(*) - COUNT(DISTINCT role_name) FROM stage_role_extraction")
+        ]
+
+        for check_name, query in dup_checks:
+            dup_count = self.conn.execute(query).fetchone()[0]
+            status = "✅" if dup_count == 0 else "⚠️"
+            print(f"    {status} {check_name}: {dup_count:,}")
+
+    def populate_kb_tables(self):
+        """Populate actual KB tables from validated staging data."""
+        print("\n📝 Populating KB tables from staging data...")
+
+        # 1. Populate kb_Genre
+        print("    Populating kb_Genre...")
+        self.conn.execute("""
+            INSERT INTO kb_Genre (kb_id, name, description, mb_genre_id, updated_at)
+            SELECT 
+                uuid() as kb_id,
+                genre_name as name,
+                COALESCE(genre_disambiguation, 'Genre with ' || total_votes || ' votes from ' || artist_count || ' artists') as description,
+                mb_genre_id,
+                CURRENT_TIMESTAMP as update_time
+            FROM stage_genre_extraction
+            WHERE quality_score >= 3  -- Only high quality genres
+            ON CONFLICT (name) DO UPDATE SET
+                description = EXCLUDED.description,
+                mb_genre_id = EXCLUDED.mb_genre_id,
+                updated_at = EXCLUDED.updated_at
+        """)
+
+        genre_inserted = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Genre").fetchone()[0]
+        print(f"        ✅ {genre_inserted:,} genres in kb_Genre")
+
+        # 2. Populate kb_Location
+        print("    Populating kb_Location...")
+        self.conn.execute("""
+            INSERT INTO kb_Location (kb_id, country, city, state_or_region, updated_at)
+            SELECT 
+                uuid() as kb_id,
+                country_name as country,
+                city_name as city,
+                region_name as state_or_region,
+                CURRENT_TIMESTAMP as update_time
+            FROM stage_location_extraction
+            WHERE artist_count >= 2  -- Only locations with multiple artists
+            ON CONFLICT (city, state_or_region, country) DO UPDATE SET
+                updated_at = EXCLUDED.updated_at
+        """)
+
+        location_inserted = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Location").fetchone()[0]
+        print(f"        ✅ {location_inserted:,} locations in kb_Location")
+
+        # 3. Populate kb_Role
+        print("    Populating kb_Role...")
+        self.conn.execute("""
+            INSERT INTO kb_Role (kb_id, name, category, description, updated_at)
+            SELECT 
+                uuid() as kb_id,
+                role_name as name,
+                role_category::role_category,
+                role_category || ' role used in ' || usage_count || ' relations across ' || unique_artists || ' artists' as description,
+                CURRENT_TIMESTAMP as update_time
+            FROM stage_role_extraction
+            WHERE usage_count >= 100  -- Only frequently used roles
+            ON CONFLICT (name) DO UPDATE SET
+                category = EXCLUDED.category,
+                description = EXCLUDED.description,
+                updated_at = EXCLUDED.updated_at
+        """)
+
+        role_inserted = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Role").fetchone()[0]
+        print(f"        ✅ {role_inserted:,} roles in kb_Role")
+
+        print(f"\n✅ Phase 1 foundation entities populated successfully!")
+
+        # Summary report
+        print(f"\n📊 PHASE 1 COMPLETION SUMMARY")
+        print(f"{'='*50}")
+        print(f"    Genres extracted: {genre_inserted:,}")
+        print(f"    Locations extracted: {location_inserted:,}")
+        print(f"    Roles extracted: {role_inserted:,}")
+        print(
+            f"    Total foundation entities: {genre_inserted + location_inserted + role_inserted:,}")
+
+        # Note on location data enhancement potential
+        print(f"\n💡 LOCATION DATA NOTES:")
+        print(f"    - ISO country codes available in staging (not yet in KB schema)")
+        print(f"    - MusicBrainz area IDs available for future linking")
+        print(f"    - 77.3% of KEXP artists have location data")
+        print(f"    - Consider schema enhancement for country_code and mb_area_id fields")
+
+    def cleanup_staging_tables(self, keep_staging: bool = True):
+        """Clean up staging tables (optional)."""
+        if not keep_staging:
+            print("\n🧹 Cleaning up staging tables...")
+            staging_tables = [
+                'stage_genre_extraction',
+                'stage_location_extraction',
+                'stage_role_extraction',
+                'mb_relations_enhanced'
+            ]
+
+            for table in staging_tables:
+                self.conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+            print("✅ Staging tables cleaned up")
+        else:
+            print(f"\n📋 Staging tables preserved for inspection:")
+            print(f"    - stage_genre_extraction")
+            print(f"    - stage_location_extraction")
+            print(f"    - stage_role_extraction")
+            print(f"    - mb_relations_enhanced")
+
+    def run_full_extraction(self, cleanup: bool = False):
+        """Run the complete Phase 1 extraction process."""
+        print("🎵 KEXP Knowledge Base - Phase 1 Foundation Extraction")
+        print("=" * 60)
+
+        try:
+            # Connect and validate
+            self.connect()
+            if not self.validate_prerequisites():
+                print("❌ Prerequisites validation failed. Aborting.")
+                return False
+
+            # Create staging and extract
+            # self.create_staging_tables()
+            # self.extract_genres_to_staging()
+            # self.extract_locations_to_staging()
+            # self.extract_roles_to_staging()
+
+            # Validate and populate
+            self.validate_staging_data()
+            self.populate_kb_tables()
+
+            # Cleanup
+            self.cleanup_staging_tables(keep_staging=not cleanup)
+
+            print(f"\n🎉 Phase 1 extraction completed successfully!")
+            return True
+
+        except Exception as e:
+            print(f"\n❌ Error during Phase 1 extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+        finally:
+            if self.conn:
+                self.conn.close()
+                print(f"\n🔐 Database connection closed.")
 
 
 def main():
     """Main execution function."""
-    print("🎵 KEXP Knowledge Base - Smart Relations Extraction")
-    print("=" * 60)
+    extractor = Phase1FoundationExtractor()
 
-    conn = connect_db()
+    # Parse command line arguments
+    cleanup_staging = "--cleanup" in sys.argv
 
-    try:
-        # Step 1: Create basic relations table
-        # create_basic_relations_table(conn)
+    success = extractor.run_full_extraction(cleanup=cleanup_staging)
 
-        # Step 2: Create specialized tables for different data types
-        create_instrument_relations_table(conn)
-        # create_genre_relations_table(conn)
-        # create_location_relations_table(conn)
-
-        # Step 3: Analyze what we found
-        # analyze_instrument_data(conn)
-
-        # Step 4: Create extraction tables
-        # create_final_extraction_tables(conn)
-
-        # Step 5: Extract entities from specialized tables
-        # extract_from_specialized_tables(conn)
-
-        print("\n✅ Smart relations extraction complete!")
-        print("📋 Review data in: mb_relations_basic, mb_instrument_relations, mb_genre_relations, mb_location_relations")
-        print("📋 Extracted entities in: extract_instruments, extract_roles, extract_genres, extract_locations")
-
-    except Exception as e:
-        print(f"❌ Error during extraction: {e}")
-        import traceback
-        traceback.print_exc()
-
-    finally:
-        conn.close()
-        print("\n🔐 Database connection closed.")
+    if success:
+        print(f"\n✅ Ready for Phase 2: Core Entity Enrichment")
+        print(f"📋 Next steps:")
+        print(f"    1. Run Phase 2 to populate kb_Artist and kb_Person")
+        print(f"    2. Review foundation entities in KB tables")
+        print(f"    3. Validate relationship readiness")
+    else:
+        print(f"\n❌ Phase 1 extraction failed. Check logs and data.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
