@@ -13,7 +13,7 @@ wheels/
 data/
 normalized_kexp_jsonl/
 kexp_data.db
-
+kexp_data.db.tmp/
 
 # Environment variables
 .env
