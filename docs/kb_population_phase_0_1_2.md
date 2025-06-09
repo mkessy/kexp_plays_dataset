@@ -7,7 +7,7 @@ We'll use `TEXT` for most string fields for flexibility in DuckDB, but `VARCHAR`
 ```sql
 CREATE TYPE artist_type AS ENUM ('PERSON', 'GROUP', 'CHARACTER', 'ORCHESTRA', 'OTHER');
 CREATE TYPE event_type AS ENUM ('SHOW', 'FESTIVAL', 'IN_STUDIO_SESSION', 'OTHER');
-CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'OTHER');
+CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'DISCOGS', 'ALLMUSIC', 'LASTFM', 'WIKIDATA', 'STREAMING', 'OTHER');
 ```
 
 ### 1. `kb_Artist`
@@ -23,6 +23,7 @@ CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFO
   - `disambiguation TEXT NULL` (For artists with same names)
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+  - `UNIQUE (mb_id)`
 
 ### 2. `kb_Person`
 
@@ -39,7 +40,19 @@ CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFO
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `UNIQUE (mb_id)`
 
-### 3. `kb_WorkOfArt` (Conceptual Superclass)
+### 3. `kb_Work`
+
+- **Description:** Represents an abstract musical composition (e.g., the composition "Yesterday"), distinct from a specific recording of it.
+- **Table:** `kb_Work`
+  - `kb_id UUID PRIMARY KEY`
+  - `title VARCHAR NOT NULL`
+  - `mb_work_id UUID`
+  - `work_type VARCHAR`
+  - `language VARCHAR`
+  - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+  - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+
+### 4. `kb_WorkOfArt` (Conceptual Superclass)
 
 This is more of a conceptual entity. In a relational model, `Song` and `Album` will be their own tables. If you had attributes common to _all_ works of art, you might have a central `kb_WorkOfArt` table, and `kb_Song`/`kb_Album` would have a foreign key to it. For simplicity now, we can embed common attributes like `title` directly into `kb_Song` and `kb_Album`.
 
@@ -47,7 +60,7 @@ This is more of a conceptual entity. In a relational model, `Song` and `Album` w
 CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
 ```
 
-### 4. `kb_Song`
+### 5. `kb_Song`
 
 - **Description:** Represents a specific musical song/track.
 - **Table:** `kb_Song`
@@ -59,7 +72,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 5. `kb_Album`
+### 6. `kb_Album`
 
 - **Description:** Represents a musical album.
 - **Table:** `kb_Album`
@@ -70,7 +83,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 6. `kb_Release`
+### 7. `kb_Release`
 
 - **Description:** A specific published instance of an Album (or sometimes a Song, like a single).
 - **Table:** `kb_Release`
@@ -85,7 +98,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 7. `kb_RecordLabel`
+### 8. `kb_RecordLabel`
 
 - **Description:** A record label.
 - **Table:** `kb_RecordLabel`
@@ -96,17 +109,18 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 8. `kb_Genre`
+### 9. `kb_Genre`
 
 - **Description:** A musical genre.
 - **Table:** `kb_Genre`
   - `kb_id UUID PRIMARY KEY`
   - `name TEXT NOT NULL UNIQUE`
+  - `mb_genre_id UUID NULL`
   - `description TEXT NULL`
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 9. `kb_Location`
+### 10. `kb_Location`
 
 - **Description:** A geographical location.
 - **Table:** `kb_Location`
@@ -120,7 +134,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `UNIQUE (city, state_or_region, country)` (to avoid duplicate locations)
 
-### 10. `kb_Venue`
+### 11. `kb_Venue`
 
 - **Description:** A place where events occur.
 - **Table:** `kb_Venue`
@@ -131,7 +145,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 11. `kb_Event`
+### 12. `kb_Event`
 
 - **Description:** A happening, like a concert, festival, broadcast.
 - **Table:** `kb_Event`
@@ -146,7 +160,7 @@ CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 12. `kb_Date` (More Granular Date Info - Optional but in your schema)
+### 13. `kb_Date` (More Granular Date Info - Optional but in your schema)
 
 While `DATE` or `TIMESTAMP` types cover most needs, your schema had a detailed `Date` entity. This can be useful for linking to qualitative date mentions.
 
@@ -162,7 +176,7 @@ While `DATE` or `TIMESTAMP` types cover most needs, your schema had a detailed `
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `UNIQUE (full_date, qualifier)` (to manage unique date concepts)
 
-### 13. `kb_URL`
+### 14. `kb_URL`
 
 - **Table:** `kb_URL`
   - `kb_id UUID PRIMARY KEY`
@@ -172,7 +186,7 @@ While `DATE` or `TIMESTAMP` types cover most needs, your schema had a detailed `
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 14. `kb_Role`
+### 15. `kb_Role`
 
 - **Table:** `kb_Role`
   - `kb_id UUID PRIMARY KEY`
@@ -181,7 +195,19 @@ While `DATE` or `TIMESTAMP` types cover most needs, your schema had a detailed `
   - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
   - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
 
-### 15. `kb_Artist_Person_Role`
+### 16. `kb_Instrument`
+
+- **Description:** Represents a musical instrument.
+- **Table:** `kb_Instrument`
+  - `kb_id UUID PRIMARY KEY`
+  - `name VARCHAR NOT NULL`
+  - `mb_instrument_id UUID`
+  - `instrument_type VARCHAR`
+  - `description VARCHAR`
+  - `created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+  - `updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`
+
+### 17. `kb_Artist_Person_Role`
 
 - **Table:** `kb_Artist_Person_Role` (e.g. Donald Byrd (artist,person) was a trumpeter, composer, producer ) primarily as the person
   - `kb_id UUID PRIMARY KEY`
@@ -237,61 +263,89 @@ These tables link the core entities. Each row represents an instance of a relati
     - `end_date DATE NULL`
     - `PRIMARY KEY (kb_group_artist_id, kb_member_artist_id)`
 
-3.  **`rel_Song_Appears_On_Release`** (Song ---> Release, 'APPEARS_ON')
+3.  **`rel_Song_Based_On_Work`** (Song ---> Work, 'BASED_ON_WORK')
+
+    - `kb_song_id UUID REFERENCES kb_Song(kb_id)`
+    - `kb_work_id UUID REFERENCES kb_Work(kb_id)`
+    - `PRIMARY KEY (kb_song_id, kb_work_id)`
+
+4.  **`rel_Song_Appears_On_Release`** (Song ---> Release, 'APPEARS_ON')
 
     - `kb_song_id UUID REFERENCES kb_Song(kb_id)`
     - `kb_release_id UUID REFERENCES kb_Release(kb_id)`
     - `track_number INTEGER NULL`
     - `PRIMARY KEY (kb_song_id, kb_release_id)`
 
-4.  **`rel_Release_By_Label`** (Release ---> Label, 'RELEASED_BY_LABEL')
+5.  **`rel_Release_By_Label`** (Release ---> Label, 'RELEASED_BY_LABEL')
 
     - `kb_release_id UUID REFERENCES kb_Release(kb_id)`
     - `kb_label_id UUID REFERENCES kb_RecordLabel(kb_id)`
     - `PRIMARY KEY (kb_release_id, kb_label_id)`
 
-5.  **`rel_Artist_Performed_At_Event`** (Artist(group, person) ---> Event, 'PERFORMED_AT')
+6.  **`rel_Artist_Performed_At_Event`** (Artist(group, person) ---> Event, 'PERFORMED_AT')
 
     - `kb_artist_id UUID REFERENCES kb_Artist(kb_id)`
     - `kb_event_id UUID REFERENCES kb_Event(kb_id)`
     - `PRIMARY KEY (kb_artist_id, kb_event_id)`
 
-6.  **`rel_Artist_Has_Genre`** (Artist(group, person) ---> Genre, 'HAS_GENRE')
+7.  **`rel_Artist_Plays_Instrument`** (Artist ---> Instrument, on a specific recording)
+
+    - `kb_artist_id UUID REFERENCES kb_Artist(kb_id)`
+    - `kb_instrument_id UUID REFERENCES kb_Instrument(kb_id)`
+    - `kb_recording_id UUID REFERENCES kb_Song(kb_id)`
+    - `PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_recording_id)`
+
+8.  **`rel_Artist_Has_Genre`** (Artist(group, person) ---> Genre, 'HAS_GENRE')
 
     - `kb_artist_id UUID REFERENCES kb_Artist(kb_id)`
     - `kb_genre_id UUID REFERENCES kb_Genre(kb_id)`
     - `PRIMARY KEY (kb_artist_id, kb_genre_id)`
 
-7.  **`rel_Song_Has_Genre`** (Song ---> Genre, 'HAS_GENRE')
+9.  **`rel_Song_Has_Genre`** (Song ---> Genre, 'HAS_GENRE')
 
     - `kb_song_id UUID REFERENCES kb_Song(kb_id)`
     - `kb_genre_id UUID REFERENCES kb_Genre(kb_id)`
     - `PRIMARY KEY (kb_song_id, kb_genre_id)`
 
-8.  **`rel_Album_Has_Genre`** (Album ---> Genre, 'HAS_GENRE')
+10. **`rel_Album_Has_Genre`** (Album ---> Genre, 'HAS_GENRE')
 
     - `kb_album_id UUID REFERENCES kb_Album(kb_id)`
     - `kb_genre_id UUID REFERENCES kb_Genre(kb_id)`
     - `PRIMARY KEY (kb_album_id, kb_genre_id)`
 
-9.  **`rel_Artist_Originates_From_Location`** (Artist ---> Location, 'ORIGINATES_FROM_LOCATION')
+11. **`rel_Artist_Originates_From_Location`** (Artist ---> Location, 'ORIGINATES_FROM_LOCATION')
 
     - `kb_artist_id UUID REFERENCES kb_Artist(kb_id)`
     - `kb_location_id UUID REFERENCES kb_Location(kb_id)`
     - `PRIMARY KEY (kb_artist_id, kb_location_id)`
 
-10. **`rel_Entity_Has_URL`** ([Entity] ---> URL, 'HAS_URL')
+12. **`rel_Entity_Has_URL`** ([Entity] ---> URL, 'HAS_URL')
 
     - `kb_entity_id UUID NOT NULL` (The kb_id of the entity, e.g., an artist, song, event)
     - `kb_url_id UUID REFERENCES kb_URL(kb_id)`
     - `kb_entity_type entity_type`
     - `PRIMARY KEY (kb_entity_id, kb_url_id)`
 
-11. **`rel_Artist_Person_Role_Played_Role`** (Artist_Person_Role ---> Entity(Song, Album, Release, Event), 'PLAYED_ROLE') e.g. Donald Byrd (artist,person) was a trumpeter, composer, producer on the album "Black Byrd" so there would be 3 rows in this table, one for each artist_person_role_id.
+13. **`rel_Artist_Person_Role_Played_Role`** (Artist_Person_Role ---> Entity(Song, Album, Release, Event), 'PLAYED_ROLE') e.g. Donald Byrd (artist,person) was a trumpeter, composer, producer on the album "Black Byrd" so there would be 3 rows in this table, one for each artist_person_role_id.
     - `kb_artist_person_role_id UUID NOT NULL REFERENCES kb_Artist_Person_Role(kb_id)`
     - `kb_target_entity_kb_id UUID NOT NULL` (e.g., kb_id of a Song or Album)
     - `target_entity_type entity_type` (e.g., 'Song', 'Album')
     - `PRIMARY KEY (kb_artist_person_role_id, kb_target_entity_kb_id)`
+
+## Bridge Tables for KEXP Integration
+
+These tables create explicit links between the new Knowledge Base entities and the existing KEXP dimension tables.
+
+1.  **`bridge_kb_artist_to_kexp`**
+
+    - `kb_artist_id UUID REFERENCES kb_Artist(kb_id)`
+    - `kexp_artist_id_internal UUID REFERENCES dim_artists_master(artist_id_internal)`
+    - `PRIMARY KEY (kb_artist_id, kexp_artist_id_internal)`
+
+2.  **`bridge_kb_song_to_kexp`**
+    - `kb_song_id UUID REFERENCES kb_Song(kb_id)`
+    - `kexp_track_id_internal UUID REFERENCES dim_tracks(track_id_internal)`
+    - `PRIMARY KEY (kb_song_id, kexp_track_id_internal)`
 
 ## Population Phase 1
 
@@ -377,7 +431,7 @@ The schema is largely consistent. Main suggestions are:
 
 ## Population Order and Logic:
 
-Here’s a logical order for populating these tables, considering their dependencies. This will be iterative, especially when processing comment data.
+Here's a logical order for populating these tables, considering their dependencies. This will be iterative, especially when processing comment data.
 
 **Phase 0: Create ENUMs and Tables**
 
@@ -486,4 +540,3 @@ This phase populates entities and relationships primarily based on information e
 This detailed population strategy should give you a clear path forward. Start with the structured data; it will provide a strong skeleton for the knowledge graph you enrich with the comment data.
 
 **Phase 3: Unstructured Data, Inspiration, Sound Discussion, Theme, Emotion, Mood, etc.**
-
