@@ -1,0 +1,51 @@
+relationship_type,target_type,count
+instrument,recording,685892
+vocal,recording,370506
+composer,work,321215
+producer,recording,297810
+writer,work,156470
+performing orchestra,recording,146449
+lyricist,work,107818
+member of band,artist,105884
+performer,recording,94766
+main performer,event,88461
+conductor,recording,78010
+other databases,url,75162
+remixer,recording,62761
+arranger,recording,59607
+discogs,url,54425
+social network,url,50218
+free streaming,url,47666
+mix,recording,44783
+instrument,release,38855
+streaming,url,27640
+wikidata,url,26804
+recording,recording,22832
+allmusic,url,21949
+official homepage,url,21329
+purchase for download,url,21141
+producer,release,18213
+mix-DJ,recording,14842
+vocal,release,14365
+bandcamp,url,13923
+last.fm,url,13826
+engineer,recording,13826
+VIAF,url,13005
+support act,event,11913
+soundcloud,url,11643
+myspace,url,11589
+youtube,url,11437
+songkick,url,10837
+phonographic copyright,recording,10503
+arranger,work,9601
+programming,recording,9465
+lyrics,url,8955
+IMDb,url,7462
+is person,artist,7033
+orchestrator,recording,5588
+mix-DJ,release,5253
+orchestrator,work,5210
+part of,series,4867
+tribute,release_group,4863
+instrument arranger,recording,4598
+copyright,release,4095

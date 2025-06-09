@@ -1,0 +1,238 @@
+MusicBrainz Attribute Extraction Results
+Generated: 2025-06-09 05:46:08
+================================================================================
+
+QUERY: Instrument Attributes Analysis - FIXED
+--------------------------------------------------
+SQL:
+
+                SELECT 
+                    attr as instrument_attribute,
+                    COUNT(*) as usage_count,
+                    COUNT(DISTINCT artist_mb_id) as unique_artists
+                FROM mb_relations_basic_v2, UNNEST(attributes_array) AS t(attr)
+                WHERE relation_type = 'instrument'
+                  AND attributes_array IS NOT NULL
+                  AND array_length(attributes_array) > 0
+                GROUP BY attr
+                ORDER BY usage_count DESC
+                LIMIT 30
+            
+
+RESULT: 30 rows
+COLUMNS: instrument_attribute, usage_count, unique_artists
+DATA:
+  1. ('piano', 114439, 2071)
+  2. ('guitar', 110078, 3166)
+  3. ('drums (drum set)', 64494, 968)
+  4. ('tenor saxophone', 37688, 317)
+  5. ('trumpet', 34668, 290)
+  6. ('bass', 30767, 1096)
+  7. ('keyboard', 23711, 1823)
+  8. ('double bass', 23056, 226)
+  9. ('electric guitar', 20639, 1248)
+  10. ('percussion', 20632, 1592)
+  11. ('alto saxophone', 17836, 244)
+  12. ('acoustic guitar', 16888, 1343)
+  13. ('saxophone', 12996, 382)
+  14. ('synthesizer', 11472, 1400)
+  15. ('bass guitar', 11328, 804)
+  16. ('organ', 9995, 795)
+  17. ('trombone', 9781, 96)
+  18. ('violin', 7769, 251)
+  19. ('flute', 7446, 364)
+  20. ('harmonica', 7122, 456)
+  21. ('membranophone', 6801, 576)
+  22. ('vibraphone', 6794, 253)
+  23. ('clarinet', 6355, 148)
+  24. ('mandolin', 6105, 274)
+  25. ('soprano saxophone', 5839, 159)
+  26. ('solo', 5585, 805)
+  27. ('electric bass guitar', 5267, 368)
+  28. ('cello', 5174, 137)
+  29. ('guest', 5147, 1285)
+  30. ('banjo', 4947, 337)
+
+================================================================================
+
+QUERY: Vocal Attributes Analysis - FIXED
+--------------------------------------------------
+SQL:
+
+                SELECT 
+                    attr as vocal_attribute,
+                    COUNT(*) as usage_count,
+                    COUNT(DISTINCT artist_mb_id) as unique_artists
+                FROM mb_relations_basic_v2, UNNEST(attributes_array) AS t(attr)
+                WHERE relation_type = 'vocal'
+                  AND attributes_array IS NOT NULL
+                  AND array_length(attributes_array) > 0
+                GROUP BY attr
+                ORDER BY usage_count DESC
+                LIMIT 20
+            
+
+RESULT: 20 rows
+COLUMNS: vocal_attribute, usage_count, unique_artists
+DATA:
+  1. ('lead vocals', 125270, 4220)
+  2. ('background vocals', 33971, 3843)
+  3. ('guest', 13749, 3869)
+  4. ('spoken vocals', 12463, 1230)
+  5. ('choir vocals', 6909, 530)
+  6. ('tenor vocals', 6494, 108)
+  7. ('additional', 3932, 1760)
+  8. ('soprano vocals', 3080, 43)
+  9. ('other vocals', 2437, 916)
+  10. ('solo', 1502, 215)
+  11. ('vocal', 1237, 548)
+  12. ('baritone vocals', 1012, 86)
+  13. ('countertenor vocals', 523, 6)
+  14. ('bass vocals', 185, 33)
+  15. ('alto vocals', 87, 16)
+  16. ('whistling', 86, 47)
+  17. ('bass-baritone vocals', 36, 2)
+  18. ('contralto vocals', 31, 10)
+  19. ('mezzo-soprano vocals', 22, 9)
+  20. ('treble vocals', 21, 3)
+
+================================================================================
+
+QUERY: All Recording Performance Attributes - FIXED
+--------------------------------------------------
+SQL:
+
+                SELECT 
+                    relation_type,
+                    attr as performance_attribute,
+                    COUNT(*) as usage_count
+                FROM mb_relations_basic_v2, UNNEST(attributes_array) AS t(attr)
+                WHERE target_type = 'recording'
+                  AND attributes_array IS NOT NULL
+                  AND array_length(attributes_array) > 0
+                GROUP BY relation_type, attr
+                ORDER BY usage_count DESC
+                LIMIT 40
+            
+
+RESULT: 40 rows
+COLUMNS: relation_type, performance_attribute, usage_count
+DATA:
+  1. ('vocal', 'lead vocals', 123100)
+  2. ('instrument', 'piano', 111103)
+  3. ('instrument', 'guitar', 102513)
+  4. ('instrument', 'drums (drum set)', 62840)
+  5. ('instrument', 'tenor saxophone', 36718)
+  6. ('instrument', 'trumpet', 33806)
+  7. ('vocal', 'background vocals', 30876)
+  8. ('instrument', 'bass', 29318)
+  9. ('instrument', 'double bass', 22699)
+  10. ('instrument', 'keyboard', 21039)
+  11. ('instrument', 'electric guitar', 19365)
+  12. ('instrument', 'percussion', 18432)
+  13. ('instrument', 'alto saxophone', 17248)
+  14. ('instrument', 'acoustic guitar', 15397)
+  15. ('vocal', 'guest', 13236)
+  16. ('instrument', 'saxophone', 12350)
+  17. ('vocal', 'spoken vocals', 12303)
+  18. ('instrument', 'bass guitar', 10488)
+  19. ('instrument', 'synthesizer', 10063)
+  20. ('instrument', 'trombone', 9567)
+  21. ('instrument', 'organ', 9098)
+  22. ('instrument', 'violin', 7297)
+  23. ('producer', 'co', 7204)
+  24. ('instrument', 'flute', 6832)
+  25. ('vocal', 'choir vocals', 6755)
+  26. ('instrument', 'vibraphone', 6494)
+  27. ('vocal', 'tenor vocals', 6451)
+  28. ('instrument', 'harmonica', 6385)
+  29. ('instrument', 'clarinet', 6145)
+  30. ('instrument', 'membranophone', 5795)
+  31. ('instrument', 'mandolin', 5563)
+  32. ('producer', 'additional', 5511)
+  33. ('instrument', 'solo', 5493)
+  34. ('instrument', 'soprano saxophone', 5305)
+  35. ('instrument', 'cello', 4960)
+  36. ('instrument', 'electric bass guitar', 4949)
+  37. ('performer', 'guest', 4787)
+  38. ('instrument', 'banjo', 4558)
+  39. ('instrument', 'guest', 4328)
+  40. ('instrument', 'fiddle', 3806)
+
+================================================================================
+
+QUERY: Producer Attributes Analysis
+--------------------------------------------------
+SQL:
+
+                SELECT 
+                    attr as producer_attribute,
+                    COUNT(*) as usage_count,
+                    COUNT(DISTINCT artist_mb_id) as unique_artists
+                FROM mb_relations_basic_v2, UNNEST(attributes_array) AS t(attr)
+                WHERE relation_type = 'producer'
+                  AND attributes_array IS NOT NULL
+                  AND array_length(attributes_array) > 0
+                GROUP BY attr
+                ORDER BY usage_count DESC
+                LIMIT 15
+            
+
+RESULT: 15 rows
+COLUMNS: producer_attribute, usage_count, unique_artists
+DATA:
+  1. ('co', 7709, 1341)
+  2. ('additional', 5717, 1660)
+  3. ('executive', 5645, 948)
+  4. ('task', 1265, 209)
+  5. ('associate', 480, 81)
+  6. ('assistant', 314, 45)
+  7. ('lead vocals', 296, 59)
+  8. ('saxophone', 27, 2)
+  9. ('other vocals', 10, 6)
+  10. ('drum machine', 9, 2)
+  11. ('background vocals', 9, 7)
+  12. ('trumpet', 7, 2)
+  13. ('bass', 5, 4)
+  14. ('strings', 5, 3)
+  15. ('electric guitar', 3, 3)
+
+================================================================================
+
+QUERY: Attribute Coverage Analysis
+--------------------------------------------------
+SQL:
+
+                SELECT 
+                    relation_type,
+                    COUNT(*) as total_relations,
+                    SUM(CASE WHEN attributes_array IS NOT NULL AND array_length(attributes_array) > 0 THEN 1 ELSE 0 END) as relations_with_attributes,
+                    ROUND(SUM(CASE WHEN attributes_array IS NOT NULL AND array_length(attributes_array) > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as attribute_coverage_percent
+                FROM mb_relations_basic_v2
+                WHERE target_type = 'recording'
+                GROUP BY relation_type
+                ORDER BY total_relations DESC
+                LIMIT 15
+            
+
+RESULT: 15 rows
+COLUMNS: relation_type, total_relations, relations_with_attributes, attribute_coverage_percent
+DATA:
+  1. ('instrument', 685892, 679632, 99.09)
+  2. ('vocal', 370506, 199179, 53.76)
+  3. ('producer', 297810, 17601, 5.91)
+  4. ('performing orchestra', 146449, 20, 0.01)
+  5. ('performer', 94766, 5480, 5.78)
+  6. ('conductor', 78010, 155, 0.2)
+  7. ('remixer', 62761, 100, 0.16)
+  8. ('arranger', 59607, 264, 0.44)
+  9. ('mix', 44783, 1078, 2.41)
+  10. ('recording', 22832, 1170, 5.12)
+  11. ('mix-DJ', 14842, 0, 0.0)
+  12. ('engineer', 13826, 1548, 11.2)
+  13. ('phonographic copyright', 10503, 0, 0.0)
+  14. ('programming', 9465, 2863, 30.25)
+  15. ('orchestrator', 5588, 17, 0.3)
+
+================================================================================
+
