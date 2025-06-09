@@ -10,7 +10,7 @@ This document outlines the phased approach to populating the KEXP Knowledge Base
 
 #### **Phase 0 & 1: Schema Creation & Foundation Entities (✓ Complete)**
 
-This work is complete. The KB schema exists, and foundational tables (`kb_Genre`, `kb_Location`, `kb_Role`, `kb_Instrument`) have been populated from the MusicBrainz data dump.
+This work is complete. The KB schema exists, and foundational tables (`kb_Genre`, `kb_Location`, `kb_Role`, `kb_Instrument`, `kb_RecordLabel`) have been populated from the MusicBrainz data dump.
 
 ---
 
@@ -98,4 +98,13 @@ This section details the logic for populating the `rel_*` tables. We will primar
   - **Example**: The row for artist "Medicine" with `relation_type = 'discogs'` and `target_type = 'url'` would create a new entry in `kb_URL` and a corresponding link in `rel_Entity_Has_URL`.
 
 - **`rel_Song_Based_On_Work` (Composition Link)**
+
   - **Status**: **Deferred**. As per our plan, we are not creating a `kb_Work` entity yet. This relationship will be implemented if/when that entity is added to the schema.
+
+- **`rel_Release_By_Label` (Release Label Information)**
+  - **Source**: `dim_labels_master` and related tables
+  - **Logic**: This relationship connects releases to their record labels.
+  - **Mapping**:
+    - `kb_release_id`: The UUID of the release from `kb_Release`
+    - `kb_label_id`: The UUID of the label from `kb_RecordLabel`
+  - **Implementation**: A canonical labels table was created and used to populate the `kb_RecordLabel` table with 20,284 unique labels from MusicBrainz, including their names and IDs. The labels are ranked by play count to show the most frequently played labels first, with Sub Pop Records, [no label], and 4AD being the most popular.
