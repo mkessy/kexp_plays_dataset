@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
+"""
+KEXP Knowledge Base - Phase 0 & 1: Schema and Foundation
+This script drops and recreates the entire Knowledge Base schema, including
+all tables and ENUM types, preparing it for data population.
+"""
 import duckdb
+import os
+import traceback
+from typing import Optional
+
+# --- Configuration ---
+DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
+
 
 # --- OBJECT LISTS FOR DROPPING ---
 
@@ -57,83 +69,62 @@ def drop_all_kb_objects(conn: duckdb.DuckDBPyConnection):
     print("\n🔥 Dropping all existing Knowledge Base objects...")
     for table in KB_TABLES_TO_DROP:
         conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
-    print("    ✅ Dropped all KB tables.")
+    print("  - ✅ Dropped all KB tables.")
 
     for enum in KB_ENUMS_TO_DROP:
         conn.execute(f"DROP TYPE IF EXISTS {enum} CASCADE;")
-    print("    ✅ Dropped all KB ENUM types.")
+    print("  - ✅ Dropped all KB ENUM types.")
     print("🔥 All KB objects dropped successfully.")
-
-# --- ENUM CREATION ---
 
 
 def create_enum_types(conn: duckdb.DuckDBPyConnection):
+    """Creates all custom ENUM types required for the KB schema."""
     print("\n🏗️  Creating ENUM types...")
     enum_statements = [
-        # Entity types
         "CREATE TYPE artist_type AS ENUM ('PERSON', 'GROUP', 'CHARACTER', 'ORCHESTRA', 'OTHER');",
         "CREATE TYPE event_type AS ENUM ('SHOW', 'FESTIVAL', 'IN_STUDIO_SESSION', 'OTHER');",
         "CREATE TYPE link_type AS ENUM ('OFFICIAL_WEBSITE', 'BANDCAMP', 'ARTICLE', 'PERFORMANCE_VIDEO', 'SOCIAL_MEDIA', 'EVENT_PAGE', 'DISCOGS', 'ALLMUSIC', 'LASTFM', 'WIKIDATA', 'STREAMING', 'OTHER');",
         "CREATE TYPE work_of_art_type AS ENUM ('SONG', 'ALBUM');",
         "CREATE TYPE entity_type AS ENUM ('ARTIST', 'SONG', 'RELEASE', 'LABEL', 'EVENT', 'GENRE', 'LOCATION', 'PERSON', 'ROLE', 'INSTRUMENT', 'WORK');",
-
-        # New Role Category Enum
-        "CREATE TYPE IF NOT EXISTS role_category AS ENUM ('Vocals', 'Instrument Performance', 'Production', 'Engineering', 'Composition', 'Performance Direction', 'Remix/DJ', 'Other');",
-
-        # Relationship types (for completeness, though not used as columns in specific tables)
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Performed_Song AS ENUM ('PERFORMED_SONG');",
-        "CREATE TYPE IF NOT EXISTS rel_Song_Featured_Artist AS ENUM ('FEATURED_ARTIST');",
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Member_Of_Artist AS ENUM ('HAS_MEMBER');",
-        "CREATE TYPE IF NOT EXISTS rel_Song_Appears_On_Release AS ENUM ('APPEARS_ON');",
-        "CREATE TYPE IF NOT EXISTS rel_Release_By_Label AS ENUM ('RELEASED_BY_LABEL');",
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Performed_At_Event AS ENUM ('PERFORMED_AT');",
-        "CREATE TYPE IF NOT EXISTS rel_Has_Genre AS ENUM ('HAS_GENRE');",
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Originates_From_Location AS ENUM ('ORIGINATES_FROM_LOCATION');",
-        "CREATE TYPE IF NOT EXISTS rel_Entity_Has_URL AS ENUM ('HAS_URL');",
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Person_Role_Played_Role AS ENUM ('PLAYED_ROLE');",
-        "CREATE TYPE IF NOT EXISTS rel_Artist_Plays_Instrument AS ENUM ('PLAYS_INSTRUMENT');",
-        "CREATE TYPE IF NOT EXISTS rel_Song_Based_On_Work AS ENUM ('BASED_ON_WORK');",
+        "CREATE TYPE role_category AS ENUM ('Vocals', 'Instrument Performance', 'Production', 'Engineering', 'Composition', 'Performance Direction', 'Remix/DJ', 'Other');"
     ]
     for stmt in enum_statements:
         conn.execute(stmt)
-    print("✅ ENUM types created.")
-
-# --- TABLE CREATION ---
+    print("  - ✅ ENUM types created.")
 
 
 def create_kb_tables(conn: duckdb.DuckDBPyConnection):
+    """Creates all tables for the Knowledge Base with appropriate constraints."""
     print("\n🏗️  Creating KB tables...")
     table_statements = [
+        # --- Entity Tables ---
         '''
         CREATE TABLE kb_Location (
-        kb_id UUID PRIMARY KEY,
-        mb_area_id UUID UNIQUE,       
-        name VARCHAR NOT NULL,
-        type VARCHAR,
-        country_code VARCHAR(3),
-        latitude DECIMAL(9,6),
-        longitude DECIMAL(9,6),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            kb_id UUID PRIMARY KEY,
+            mb_area_id UUID UNIQUE,
+            name VARCHAR NOT NULL,
+            type VARCHAR,
+            country_code VARCHAR(3),
+            latitude DECIMAL(9,6),
+            longitude DECIMAL(9,6),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # kb_Person
         '''CREATE TABLE kb_Person (
             kb_id UUID PRIMARY KEY,
             legal_name TEXT NULL,
             common_name TEXT NOT NULL,
-            mb_person_id UUID NULL,
+            mb_person_id UUID UNIQUE,
             gender VARCHAR(50) NULL,
             nationality VARCHAR(50) NULL,
             disambiguation TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (mb_person_id)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # kb_Artist
         '''CREATE TABLE kb_Artist (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL,
-            mb_artist_id UUID NULL,
+            mb_artist_id UUID UNIQUE,
             country_id UUID NULL REFERENCES kb_Location(kb_id),
             kb_artist_type artist_type,
             kb_person_id UUID NULL REFERENCES kb_Person(kb_id),
@@ -141,11 +132,10 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # Other tables remain the same as previous correct version...
         '''CREATE TABLE kb_Work (
             kb_id UUID PRIMARY KEY,
             title VARCHAR NOT NULL,
-            mb_work_id UUID,
+            mb_work_id UUID UNIQUE,
             work_type VARCHAR,
             language VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -155,8 +145,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             type work_of_art_type DEFAULT 'SONG',
-            mb_recording_id UUID NULL,
-            mb_work_id UUID NULL,
+            mb_recording_id UUID UNIQUE,
+            mb_work_id UUID NULL, -- This can be populated later
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
@@ -164,7 +154,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_id UUID PRIMARY KEY,
             title TEXT NOT NULL,
             type work_of_art_type DEFAULT 'ALBUM',
-            mb_release_group_id UUID NULL,
+            mb_release_group_id UUID UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
@@ -172,7 +162,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_id UUID PRIMARY KEY,
             album_id UUID NULL REFERENCES kb_Album(kb_id),
             title TEXT NOT NULL,
-            mb_release_id UUID NULL,
+            mb_release_id UUID UNIQUE,
             release_date DATE NULL,
             country_id UUID NULL REFERENCES kb_Location(kb_id),
             format VARCHAR(100) NULL,
@@ -182,8 +172,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
         );''',
         '''CREATE TABLE kb_RecordLabel (
             kb_id UUID PRIMARY KEY,
-            name TEXT NOT NULL,
-            mb_label_id UUID NULL,
+            name TEXT NOT NULL UNIQUE,
+            mb_label_id UUID UNIQUE,
             country TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -191,15 +181,15 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
         '''CREATE TABLE kb_Genre (
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL UNIQUE,
-            mb_genre_id UUID NULL,
+            mb_genre_id UUID UNIQUE,
             description TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
         '''CREATE TABLE kb_Instrument (
             kb_id UUID PRIMARY KEY,
-            name VARCHAR NOT NULL,
-            mb_instrument_id UUID,
+            name VARCHAR NOT NULL UNIQUE,
+            mb_instrument_id UUID UNIQUE,
             instrument_type VARCHAR,
             description VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -209,7 +199,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_id UUID PRIMARY KEY,
             name TEXT NOT NULL,
             location_id UUID NULL REFERENCES kb_Location(kb_id),
-            mb_id UUID NULL,
+            mb_id UUID UNIQUE,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
@@ -253,8 +243,7 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # 15. kb_Artist_Person_Role
-        '''CREATE TABLE IF NOT EXISTS kb_Artist_Person_Role (
+        '''CREATE TABLE kb_Artist_Person_Role (
             kb_id UUID PRIMARY KEY,
             kb_artist_id UUID NULL REFERENCES kb_Artist(kb_id),
             kb_person_id UUID REFERENCES kb_Person(kb_id),
@@ -263,120 +252,120 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );''',
-        # Relationship tables
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Performed_Song (
+
+        # --- Relationship Tables ---
+        '''CREATE TABLE rel_Artist_Performed_Song (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             PRIMARY KEY (kb_artist_id, kb_song_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Member_Of_Artist (
+        '''CREATE TABLE rel_Artist_Member_Of_Artist (
             kb_group_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_member_artist_id UUID REFERENCES kb_Artist(kb_id),
             start_date DATE NULL,
             end_date DATE NULL,
             PRIMARY KEY (kb_group_artist_id, kb_member_artist_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Song_Based_On_Work (
+        '''CREATE TABLE rel_Song_Based_On_Work (
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             kb_work_id UUID REFERENCES kb_Work(kb_id),
             PRIMARY KEY (kb_song_id, kb_work_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Song_Appears_On_Release (
+        '''CREATE TABLE rel_Song_Appears_On_Release (
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             kb_release_id UUID REFERENCES kb_Release(kb_id),
             track_number INTEGER NULL,
             PRIMARY KEY (kb_song_id, kb_release_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Release_By_Label (
+        '''CREATE TABLE rel_Release_By_Label (
             kb_release_id UUID REFERENCES kb_Release(kb_id),
             kb_label_id UUID REFERENCES kb_RecordLabel(kb_id),
             PRIMARY KEY (kb_release_id, kb_label_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Performed_At_Event (
+        '''CREATE TABLE rel_Artist_Performed_At_Event (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_event_id UUID REFERENCES kb_Event(kb_id),
             PRIMARY KEY (kb_artist_id, kb_event_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Plays_Instrument (
+        '''CREATE TABLE rel_Artist_Plays_Instrument (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_instrument_id UUID REFERENCES kb_Instrument(kb_id),
             kb_recording_id UUID REFERENCES kb_Song(kb_id),
             PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_recording_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Has_Genre (
+        '''CREATE TABLE rel_Artist_Has_Genre (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_genre_id UUID REFERENCES kb_Genre(kb_id),
             PRIMARY KEY (kb_artist_id, kb_genre_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Song_Has_Genre (
+        '''CREATE TABLE rel_Song_Has_Genre (
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             kb_genre_id UUID REFERENCES kb_Genre(kb_id),
             PRIMARY KEY (kb_song_id, kb_genre_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Album_Has_Genre (
+        '''CREATE TABLE rel_Album_Has_Genre (
             kb_album_id UUID REFERENCES kb_Album(kb_id),
             kb_genre_id UUID REFERENCES kb_Genre(kb_id),
             PRIMARY KEY (kb_album_id, kb_genre_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Originates_From_Location (
+        '''CREATE TABLE rel_Artist_Originates_From_Location (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_location_id UUID REFERENCES kb_Location(kb_id),
             PRIMARY KEY (kb_artist_id, kb_location_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Entity_Has_URL (
+        '''CREATE TABLE rel_Entity_Has_URL (
             kb_entity_id UUID NOT NULL,
             kb_url_id UUID REFERENCES kb_URL(kb_id),
             kb_entity_type entity_type,
             PRIMARY KEY (kb_entity_id, kb_url_id)
         );''',
-        '''CREATE TABLE IF NOT EXISTS rel_Artist_Person_Role_Played_Role (
+        '''CREATE TABLE rel_Artist_Person_Role_Played_Role (
             kb_artist_person_role_id UUID NOT NULL REFERENCES kb_Artist_Person_Role(kb_id),
             kb_target_entity_kb_id UUID NOT NULL,
             target_entity_type entity_type,
             PRIMARY KEY (kb_artist_person_role_id, kb_target_entity_kb_id)
         );''',
-        # Bridge tables
-        '''CREATE TABLE IF NOT EXISTS bridge_kb_artist_to_kexp (
+
+        # --- Bridge Tables ---
+        '''CREATE TABLE bridge_kb_artist_to_kexp (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kexp_artist_id_internal UUID REFERENCES dim_artists_master(artist_id_internal),
             PRIMARY KEY (kb_artist_id, kexp_artist_id_internal)
         );''',
-        '''CREATE TABLE IF NOT EXISTS bridge_kb_song_to_kexp (
+        '''CREATE TABLE bridge_kb_song_to_kexp (
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             kexp_track_id_internal UUID REFERENCES dim_tracks(track_id_internal),
             PRIMARY KEY (kb_song_id, kexp_track_id_internal)
-        );''',
+        );'''
     ]
     for stmt in table_statements:
         conn.execute(stmt)
-    print("✅ KB tables created.")
-
-
-# --- MAIN ---
+    print("  - ✅ KB tables created.")
 
 
 def main():
-    db_path = "kexp_data.db"
-    print(f"Connecting to DuckDB at {db_path} ...")
-    conn = duckdb.connect(db_path)
+    """Main execution function to drop and recreate the KB schema."""
+    print("--- KEXP Knowledge Base Schema Setup ---")
+    conn: Optional[duckdb.DuckDBPyConnection] = None
     try:
+        conn = duckdb.connect(DB_PATH)
         # Drop everything first for a clean slate
         drop_all_kb_objects(conn)
 
-        # Now, create the schema and ingest initial data
+        # Now, create the schema
         create_enum_types(conn)
         create_kb_tables(conn)
 
-        print("\n🎉 Schema creation and initial population process completed successfully!")
+        print("\n🎉 Schema creation process completed successfully!")
 
     except Exception as e:
         print(f"\n❌ An error occurred during schema creation: {e}")
-        import traceback
         traceback.print_exc()
 
     finally:
-        conn.close()
-        print("\n🔐 Database connection closed.")
+        if conn:
+            conn.close()
+            print("\n🔐 Database connection closed.")
 
 
 if __name__ == "__main__":

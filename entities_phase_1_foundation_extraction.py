@@ -164,7 +164,7 @@ class Phase1FoundationExtractor:
                     STRING_AGG(artist_name, '; ') FILTER (WHERE rn <= 3) as sample_artists
                 FROM genre_artist_samples
                 GROUP BY genre_id, genre_name, genre_disambiguation, total_votes
-                HAVING total_votes >= 5  -- Minimum vote threshold
+                HAVING total_votes >= 2  -- Minimum vote threshold
                 AND COUNT(DISTINCT artist_name) >= 2  -- Minimum artist coverage
             )
             INSERT INTO stage_genre_extraction
@@ -495,7 +495,7 @@ class Phase1FoundationExtractor:
                     STRING_AGG(DISTINCT artist_name, '; ') FILTER (WHERE rn <= 3) as sample_artists
                 FROM instrument_artist_samples
                 GROUP BY instrument_name
-                HAVING COUNT(*) >= 5
+                HAVING COUNT(*) >= 1
             )
             INSERT INTO stage_instrument_extraction (instrument_name, instrument_category, usage_count, unique_artists, sample_artists)
             SELECT
@@ -639,6 +639,10 @@ class Phase1FoundationExtractor:
                 updated_at = EXCLUDED.updated_at
         """)
 
+        role_inserted = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Role").fetchone()[0]
+        print(f"        ✅ {role_inserted:,} roles in kb_Role")
+
         # 4. Populate kb_Instrument
         print("    Populating kb_Instrument...")
         self.conn.execute("""
@@ -651,6 +655,7 @@ class Phase1FoundationExtractor:
                 CURRENT_TIMESTAMP as updated_at
             FROM stage_instrument_extraction
             WHERE usage_count >= 5  
+            ON CONFLICT (name) DO NOTHING;
         """)
 
         instrument_inserted = self.conn.execute(
