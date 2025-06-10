@@ -1,0 +1,66 @@
+{
+  "extraction_timestamp": "2025-06-10T13:59:41.333465",
+  "relationship_summary": {
+    "artist_genre": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "song_genre": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "album_genre": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "artist_location": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "release_label": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "artist_label": {
+      "total_relationships": 0,
+      "unique_subjects": 0,
+      "unique_objects": 0,
+      "predicates_used": []
+    },
+    "total_categorical_triples": 0
+  },
+  "entity_coverage": [
+    {
+      "entity_type": "kb_Artist",
+      "total_entities": 177517,
+      "with_mb_id": 65068
+    },
+    {
+      "entity_type": "kb_Song",
+      "total_entities": 1262818,
+      "with_mb_id": 140596
+    },
+    {
+      "entity_type": "kb_Album",
+      "total_entities": 73238,
+      "with_mb_id": 73238
+    },
+    {
+      "entity_type": "kb_Release",
+      "total_entities": 84454,
+      "with_mb_id": 84454
+    }
+  ],
+  "data_quality_insights": {},
+  "saved_files": []
+}

@@ -1,0 +1,473 @@
+{
+  "legacy_tables": {
+    "rel_Artist_Plays_Instrument": {
+      "row_count": 31238,
+      "schema": [
+        {
+          "column_name": "kb_artist_id",
+          "column_type": "UUID",
+          "null": "NO",
+          "key": "PRI",
+          "default": null,
+          "extra": null
+        },
+        {
+          "column_name": "kb_instrument_id",
+          "column_type": "UUID",
+          "null": "NO",
+          "key": "PRI",
+          "default": null,
+          "extra": null
+        },
+        {
+          "column_name": "kb_song_id",
+          "column_type": "UUID",
+          "null": "NO",
+          "key": "PRI",
+          "default": null,
+          "extra": null
+        }
+      ],
+      "sample_data": [
+        {
+          "kb_artist_id": "bbda6033-8405-48da-9b10-deebba89656d",
+          "kb_instrument_id": "dd985416-17b9-4d42-93b6-0b387764a466",
+          "kb_song_id": "ee2b555a-dd76-488d-84ad-2c204ea2e056"
+        },
+        {
+          "kb_artist_id": "80020a61-6c7a-4dc7-bfe6-6c734d641632",
+          "kb_instrument_id": "42e7db5c-eee5-43fb-bfa8-71c3cc348ac3",
+          "kb_song_id": "21be236e-53b1-493a-803a-202413185150"
+        },
+        {
+          "kb_artist_id": "c993567a-d1cc-4dd8-ab91-71795968d079",
+          "kb_instrument_id": "37560be8-e182-4435-89d7-d724523b8152",
+          "kb_song_id": "1ee411e0-f6a6-4c10-a2df-26f93d5f0749"
+        },
+        {
+          "kb_artist_id": "fe2097ba-2705-475a-a2a9-89e4eee28d30",
+          "kb_instrument_id": "42e7db5c-eee5-43fb-bfa8-71c3cc348ac3",
+          "kb_song_id": "0b272101-c05e-4bb5-b1e4-ac188877b00d"
+        },
+        {
+          "kb_artist_id": "34cfb05f-ab11-4b2d-ab94-29bc4f098911",
+          "kb_instrument_id": "b560a117-6e20-4de1-a278-611eb6be5f2c",
+          "kb_song_id": "d86ce509-f1ad-4972-97b4-6c86818b6c6a"
+        }
+      ],
+      "metadata": {
+        "description": "Artist plays instrument on song (ternary relationship)",
+        "expected_predicates": [
+          "plays_instrument_on"
+        ],
+        "complexity": "high"
+      }
+    },
+    "rel_Artist_Member_Of_Artist": {
+      "row_count": 8146,
+      "schema": [
+        {
+          "column_name": "kb_group_artist_id",
+          "column_type": "UUID",
+          "null": "NO",
+          "key": "PRI",
+          "default": null,
+          "extra": null
+        },
+        {
+          "column_name": "kb_member_artist_id",
+          "column_type": "UUID",
+          "null": "NO",
+          "key": "PRI",
+          "default": null,
+          "extra": null
+        },
+        {
+          "column_name": "start_date",
+          "column_type": "DATE",
+          "null": "YES",
+          "key": null,
+          "default": null,
+          "extra": null
+        },
+        {
+          "column_name": "end_date",
+          "column_type": "DATE",
+          "null": "YES",
+          "key": null,
+          "default": null,
+          "extra": null
+        }
+      ],
+      "sample_data": [
+        {
+          "kb_group_artist_id": "f5fd7cd9-3c2c-4eb9-a127-3a99579403aa",
+          "kb_member_artist_id": "faa53348-a6d5-4e2e-9776-ac6f661d9ea1",
+          "start_date": "NaT",
+          "end_date": "NaT"
+        },
+        {
+          "kb_group_artist_id": "4b770950-8368-47e6-a045-7220a27be7a2",
+          "kb_member_artist_id": "b25a9543-9366-437d-95d4-339329d38da6",
+          "start_date": "NaT",
+          "end_date": "NaT"
+        },
+        {
+          "kb_group_artist_id": "067e6f12-b4d1-40f1-a4ad-16a30551e9e2",
+          "kb_member_artist_id": "1183bc49-ba80-4c9e-88de-234d30c6f530",
+          "start_date": "NaT",
+          "end_date": "NaT"
+        },
+        {
+          "kb_group_artist_id": "7e502a21-3f1c-426b-9a52-acc4fbfc3c69",
+          "kb_member_artist_id": "0ae9d9b7-244a-4e39-9dd0-121f1cf60d6b",
+          "start_date": "NaT",
+          "end_date": "NaT"
+        },
+        {
+          "kb_group_artist_id": "2a1fa75d-2398-4243-8ac2-0a5be472b6bf",
+          "kb_member_artist_id": "dae5a0ae-6beb-4cfa-a47d-a66a07d1875a",
+          "start_date": "NaT",
+          "end_date": "NaT"
+        }
+      ],
+      "metadata": {
+        "description": "Artist membership in bands (temporal relationship)",
+        "expected_predicates": [
+          "member_of"
+        ],
+        "complexity": "medium"
+      }
+    }
+  },
+  "embedded_relationships": {
+    "artist_person": {
+      "error": "Binder Error: Table \"t\" does not have a column named \"name\"\n\nCandidate bindings: : \"nationality\"\n\nLINE 6:                     t.name as target_name\n                            ^"
+    },
+    "release_album": {
+      "error": "Binder Error: Table \"s\" does not have a column named \"name\"\n\nCandidate bindings: : \"format\"\n\nLINE 4:                     s.name as source_name,\n                            ^"
+    }
+  },
+  "conflicts": {
+    "member_of": {
+      "existing_triples": 16292,
+      "legacy_relationships": 8146,
+      "potential_duplicates": "high"
+    },
+    "plays_instrument_on": {
+      "existing_triples": 22131,
+      "legacy_relationships": 31238,
+      "potential_duplicates": "high"
+    }
+  },
+  "integrity": {
+    "rel_Artist_Plays_Instrument": {
+      "total_relationships": 31238,
+      "orphaned_artists": 0,
+      "orphaned_instruments": 0,
+      "orphaned_songs": 0,
+      "integrity_score": 1.0
+    },
+    "rel_Artist_Member_Of_Artist": {
+      "total_relationships": 8146,
+      "orphaned_members": 0,
+      "orphaned_groups": 0,
+      "integrity_score": 1.0
+    }
+  },
+  "patterns": {
+    "top_instruments": [
+      {
+        "instrument_name": "guitar",
+        "usage_count": 5779,
+        "unique_artists": 1075,
+        "unique_songs": 4872
+      },
+      {
+        "instrument_name": "piano",
+        "usage_count": 2477,
+        "unique_artists": 573,
+        "unique_songs": 2390
+      },
+      {
+        "instrument_name": "drums (drum set)",
+        "usage_count": 2367,
+        "unique_artists": 342,
+        "unique_songs": 2320
+      },
+      {
+        "instrument_name": "electric guitar",
+        "usage_count": 1705,
+        "unique_artists": 366,
+        "unique_songs": 1504
+      },
+      {
+        "instrument_name": "keyboard",
+        "usage_count": 1701,
+        "unique_artists": 498,
+        "unique_songs": 1561
+      },
+      {
+        "instrument_name": "percussion",
+        "usage_count": 1402,
+        "unique_artists": 411,
+        "unique_songs": 1293
+      },
+      {
+        "instrument_name": "synthesizer",
+        "usage_count": 1287,
+        "unique_artists": 373,
+        "unique_songs": 1217
+      },
+      {
+        "instrument_name": "bass guitar",
+        "usage_count": 1273,
+        "unique_artists": 279,
+        "unique_songs": 1249
+      },
+      {
+        "instrument_name": "acoustic guitar",
+        "usage_count": 1256,
+        "unique_artists": 364,
+        "unique_songs": 1161
+      },
+      {
+        "instrument_name": "bass",
+        "usage_count": 1082,
+        "unique_artists": 300,
+        "unique_songs": 1053
+      },
+      {
+        "instrument_name": "organ",
+        "usage_count": 679,
+        "unique_artists": 208,
+        "unique_songs": 661
+      },
+      {
+        "instrument_name": "tenor saxophone",
+        "usage_count": 513,
+        "unique_artists": 105,
+        "unique_songs": 500
+      },
+      {
+        "instrument_name": "electric bass guitar",
+        "usage_count": 505,
+        "unique_artists": 97,
+        "unique_songs": 502
+      },
+      {
+        "instrument_name": "trumpet",
+        "usage_count": 489,
+        "unique_artists": 101,
+        "unique_songs": 481
+      },
+      {
+        "instrument_name": "harmonica",
+        "usage_count": 349,
+        "unique_artists": 95,
+        "unique_songs": 344
+      },
+      {
+        "instrument_name": "saxophone",
+        "usage_count": 342,
+        "unique_artists": 116,
+        "unique_songs": 331
+      },
+      {
+        "instrument_name": "double bass",
+        "usage_count": 318,
+        "unique_artists": 67,
+        "unique_songs": 316
+      },
+      {
+        "instrument_name": "electric piano",
+        "usage_count": 285,
+        "unique_artists": 96,
+        "unique_songs": 257
+      },
+      {
+        "instrument_name": "guest",
+        "usage_count": 257,
+        "unique_artists": 187,
+        "unique_songs": 234
+      },
+      {
+        "instrument_name": "alto saxophone",
+        "usage_count": 224,
+        "unique_artists": 64,
+        "unique_songs": 222
+      }
+    ],
+    "largest_bands": [
+      {
+        "band_name": "Soul Assassins",
+        "member_count": 21,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Black Men United",
+        "member_count": 21,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "The Stop the Violence Movement",
+        "member_count": 21,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "All Star Tribute",
+        "member_count": 19,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Material feat. Lori Carson and Bernie Worrell",
+        "member_count": 16,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Fania All-Stars",
+        "member_count": 15,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Pigface",
+        "member_count": 15,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Bill Monroe and the Bluegrass Boys",
+        "member_count": 14,
+        "relationships_with_start_date": 1,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Delaney & Bonnie",
+        "member_count": 14,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "David Murray Quartet",
+        "member_count": 12,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Juice Crew",
+        "member_count": 12,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Miles Davis All Stars",
+        "member_count": 12,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Odd Future",
+        "member_count": 12,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Ruff Ryders feat. Drag-On & Juvenile",
+        "member_count": 11,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Max Romeo & The Upsetters",
+        "member_count": 11,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Santana",
+        "member_count": 11,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "The Skatalites",
+        "member_count": 10,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Dungeon Family",
+        "member_count": 10,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      },
+      {
+        "band_name": "Wu\u2010Tang Clan",
+        "member_count": 10,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 1
+      },
+      {
+        "band_name": "Roll Deep",
+        "member_count": 10,
+        "relationships_with_start_date": 0,
+        "relationships_with_end_date": 0
+      }
+    ]
+  },
+  "recommendations": {
+    "migration_order": [
+      {
+        "phase": 1,
+        "operation": "Migrate rel_Artist_Member_Of_Artist",
+        "rationale": "Binary relationship, lower complexity, potential conflicts with existing data",
+        "risk": "medium"
+      },
+      {
+        "phase": 2,
+        "operation": "Migrate embedded artist\u2192person relationships",
+        "rationale": "High volume, simple binary relationship, no conflicts expected",
+        "risk": "low"
+      },
+      {
+        "phase": 3,
+        "operation": "Migrate embedded release\u2192album relationships",
+        "rationale": "High volume, simple binary relationship, no conflicts expected",
+        "risk": "low"
+      },
+      {
+        "phase": 4,
+        "operation": "Migrate rel_Artist_Plays_Instrument",
+        "rationale": "Ternary relationship requiring complex transformation, highest risk",
+        "risk": "high"
+      }
+    ],
+    "data_backup_strategy": [
+      "Full database backup before starting",
+      "Table-level backups of relationship tables",
+      "Incremental backups between phases"
+    ],
+    "validation_requirements": [
+      "Row count validation for each migration",
+      "Referential integrity checks",
+      "Duplicate triple detection",
+      "Performance impact assessment"
+    ],
+    "special_considerations": [
+      "Existing member_of relationships detected - need deduplication strategy",
+      "Consider merging vs replacing existing relationships"
+    ]
+  },
+  "summary": {
+    "analysis_timestamp": "2025-06-10T13:04:58.559957",
+    "total_legacy_relationships": 39384,
+    "total_embedded_relationships": 0,
+    "estimated_new_triples": 39384
+  }
+}

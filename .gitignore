@@ -28,6 +28,10 @@ Library
 
 .claude.json
 
+output/
+phase3_output/
+relationship_analysis/
+
 # Analysis outputs
 comment_chunks_sample.jsonl
 chunk_evaluation_samples/

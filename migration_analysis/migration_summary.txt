@@ -1,0 +1,20 @@
+KEXP Knowledge Base - Legacy Relationship Migration Analysis
+============================================================
+
+Analysis Date: 2025-06-10T13:04:58.559957
+Total Legacy Relationships: 39,384
+Total Embedded Relationships: 0
+Estimated New Triples: 39,384
+
+Legacy Tables Analysis:
+-------------------------
+rel_Artist_Plays_Instrument: 31,238 rows
+  Complexity: high
+  Expected Predicates: ['plays_instrument_on']
+
+rel_Artist_Member_Of_Artist: 8,146 rows
+  Complexity: medium
+  Expected Predicates: ['member_of']
+
+Embedded Relationships:
+----------------------
