@@ -250,7 +250,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_role_id UUID REFERENCES kb_Role(kb_id),
             description TEXT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (kb_person_id, kb_role_id)
         );''',
 
         # --- Relationship Tables ---
@@ -290,8 +291,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
         '''CREATE TABLE rel_Artist_Plays_Instrument (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_instrument_id UUID REFERENCES kb_Instrument(kb_id),
-            kb_recording_id UUID REFERENCES kb_Song(kb_id),
-            PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_recording_id)
+            kb_song_id UUID REFERENCES kb_Song(kb_id),
+            PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_song_id)
         );''',
         '''CREATE TABLE rel_Artist_Has_Genre (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
@@ -336,7 +337,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
             kb_song_id UUID REFERENCES kb_Song(kb_id),
             kexp_track_id_internal UUID REFERENCES dim_tracks(track_id_internal),
             PRIMARY KEY (kb_song_id, kexp_track_id_internal)
-        );'''
+        );''',
+
     ]
     for stmt in table_statements:
         conn.execute(stmt)

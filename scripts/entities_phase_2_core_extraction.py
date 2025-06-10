@@ -49,18 +49,20 @@ class Phase2CoreEntityExtractor:
         all_exist = True
         for table in required_tables:
             try:
-                count = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                count = self.conn.execute(
+                    f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 print(f"  - ✅ Table '{table}' exists with {count:,} records.")
             except duckdb.Error as e:
                 print(f"  - ❌ Missing required table '{table}': {e}")
                 all_exist = False
-        
+
         if not all_exist:
-             print("\nError: One or more required tables are missing. Please ensure all previous scripts have run.")
-             return False
-        
+            print(
+                "\nError: One or more required tables are missing. Please ensure all previous scripts have run.")
+            return False
+
         return True
-    
+
     def create_staging_tables(self):
         """Creates fresh staging tables for this extraction phase."""
         print("\n🏗️  Creating or replacing staging tables...")
@@ -94,7 +96,7 @@ class Phase2CoreEntityExtractor:
                 is_person BOOLEAN
             )
         """)
-        
+
         # Staging table for Persons (derived from Artists of type Person)
         self.conn.execute("""
             CREATE TABLE stage_person_extraction (
@@ -111,7 +113,7 @@ class Phase2CoreEntityExtractor:
                 title VARCHAR NOT NULL
             )
         """)
-        
+
         # Staging table for Releases
         self.conn.execute("""
             CREATE TABLE stage_release_extraction (
@@ -139,13 +141,14 @@ class Phase2CoreEntityExtractor:
                 mb_track_id -- Assuming mb_track_id maps to a work-like concept for now
             FROM dim_tracks;
         """)
-        count = self.conn.execute("SELECT COUNT(*) FROM stage_song_extraction").fetchone()[0]
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_song_extraction").fetchone()[0]
         print(f"  - ✅ Extracted {count:,} total songs to staging.")
 
     def extract_artists_to_staging(self):
         """Extracts artist data from KEXP and MusicBrainz into a staging table."""
         print("\n👨‍🎤 Extracting artists to staging...")
-        
+
         # This query joins KEXP's artist dimension with the raw MB data to get artist type and life span.
         # It uses try_cast(regexp_extract(...)) to safely parse the year from potentially malformed date strings.
         self.conn.execute("""
@@ -169,7 +172,8 @@ class Phase2CoreEntityExtractor:
             FROM dim_artists_master AS kexp
             LEFT JOIN mb_artists_raw AS mb ON kexp.mb_id = CAST(mb.id AS UUID);
         """)
-        count = self.conn.execute("SELECT COUNT(*) FROM stage_artist_extraction").fetchone()[0]
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_artist_extraction").fetchone()[0]
         print(f"  - ✅ Extracted {count:,} total artists to staging.")
 
     def extract_persons_to_staging(self):
@@ -185,7 +189,8 @@ class Phase2CoreEntityExtractor:
             JOIN mb_artists_raw AS mb_raw ON mb.mb_artist_id = CAST(mb_raw.id AS UUID)
             WHERE mb.is_person = TRUE AND mb.mb_artist_id IS NOT NULL;
         """)
-        count = self.conn.execute("SELECT COUNT(*) FROM stage_person_extraction").fetchone()[0]
+        count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_person_extraction").fetchone()[0]
         print(f"  - ✅ Extracted {count:,} persons to staging.")
 
     def extract_albums_releases_to_staging(self):
@@ -212,8 +217,10 @@ class Phase2CoreEntityExtractor:
             ) AS release_group_titles
             GROUP BY mb_release_group_id;
         """)
-        album_count = self.conn.execute("SELECT COUNT(*) FROM stage_album_extraction").fetchone()[0]
-        print(f"  - ✅ Extracted {album_count:,} unique albums (release groups) to staging.")
+        album_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_album_extraction").fetchone()[0]
+        print(
+            f"  - ✅ Extracted {album_count:,} unique albums (release groups) to staging.")
 
         # Populate Release staging table
         self.conn.execute("""
@@ -226,7 +233,8 @@ class Phase2CoreEntityExtractor:
                 release_date_iso
             FROM dim_releases_master;
         """)
-        release_count = self.conn.execute("SELECT COUNT(*) FROM stage_release_extraction").fetchone()[0]
+        release_count = self.conn.execute(
+            "SELECT COUNT(*) FROM stage_release_extraction").fetchone()[0]
         print(f"  - ✅ Extracted {release_count:,} total releases to staging.")
 
     def populate_kb_tables(self):
@@ -288,7 +296,7 @@ class Phase2CoreEntityExtractor:
             );
         """)
         print(f"  - Populated kb_Artist.")
-        
+
         # Populate kb_Song
         self.conn.execute("""
             -- Songs with MB ID
@@ -315,7 +323,7 @@ class Phase2CoreEntityExtractor:
             ON CONFLICT (mb_release_group_id) DO NOTHING;
         """)
         print(f"  - Populated kb_Album.")
-        
+
         # Populate kb_Release
         self.conn.execute("""
             -- Releases with album link
@@ -341,6 +349,14 @@ class Phase2CoreEntityExtractor:
         """)
         print(f"  - Populated kb_Release.")
 
+        # Populate kb_RecordLabel
+        self.conn.execute("""
+            INSERT INTO kb_RecordLabel(kb_id, name, mb_label_id, updated_at)
+            SELECT uuid(), label_name as name, label_id as mb_label_id, CURRENT_TIMESTAMP
+            FROM canonical_labels  
+            ON CONFLICT (name) DO NOTHING;
+        """)
+
         # --- Populate Bridge Tables ---
         print("\n🔗 Populating bridge tables for traceability...")
         # Bridge artists with MB IDs
@@ -365,7 +381,7 @@ class Phase2CoreEntityExtractor:
             WHERE sa.mb_artist_id IS NULL
             ON CONFLICT DO NOTHING;
         """)
-        
+
         # Bridge songs with MB IDs
         self.conn.execute("""
             INSERT INTO bridge_kb_song_to_kexp (kb_song_id, kexp_track_id_internal)
@@ -390,13 +406,13 @@ class Phase2CoreEntityExtractor:
         """)
 
         print("  - ✅ Bridge tables populated.")
-        
+
         print("\n📊 PHASE 2 COMPLETION SUMMARY")
         print(f"{'='*50}")
         for table in ['kb_Song', 'kb_Artist', 'kb_Person', 'kb_Album', 'kb_Release', 'bridge_kb_artist_to_kexp', 'bridge_kb_song_to_kexp']:
-             count = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-             print(f"  - Total entities in {table}: {count:,}")
-
+            count = self.conn.execute(
+                f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            print(f"  - Total entities in {table}: {count:,}")
 
     def cleanup_staging_tables(self, keep_staging: bool = True):
         """Optionally cleans up staging tables."""
@@ -426,7 +442,7 @@ class Phase2CoreEntityExtractor:
             self.extract_artists_to_staging()
             self.extract_persons_to_staging()
             self.extract_albums_releases_to_staging()
-            
+
             self.populate_kb_tables()
             self.cleanup_staging_tables(keep_staging=not cleanup)
 

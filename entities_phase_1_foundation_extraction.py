@@ -375,10 +375,10 @@ class Phase1FoundationExtractor:
                 r."target-type" as target_type,
                 r.attributes as attributes_raw,
                 CASE
-                    WHEN r.attributes IS NULL THEN []::VARCHAR[]
-                    WHEN typeof(r.attributes) = 'VARCHAR[][]' THEN r.attributes[1]
-                    WHEN typeof(r.attributes) = 'VARCHAR[]' THEN r.attributes
-                    ELSE []::VARCHAR[]
+                    WHEN r.attributes IS NULL THEN CAST([] AS VARCHAR[])
+                    WHEN typeof(r.attributes) = 'VARCHAR[][]' THEN CAST(r.attributes[1] AS VARCHAR[])
+                    WHEN typeof(r.attributes) = 'VARCHAR[]' THEN CAST(r.attributes AS VARCHAR[])
+                    ELSE CAST([] AS VARCHAR[])
                 END as attributes_array,
                 r.begin as begin_date,
                 r.end as end_date
@@ -632,7 +632,7 @@ class Phase1FoundationExtractor:
                 role_category || ' role used in ' || usage_count || ' relations across ' || unique_artists || ' artists' as description,
                 CURRENT_TIMESTAMP as update_time
             FROM stage_role_extraction
-            WHERE usage_count >= 100  -- Only frequently used roles
+            WHERE usage_count >= 10  -- Only frequently used roles
             ON CONFLICT (name) DO UPDATE SET
                 category = EXCLUDED.category,
                 description = EXCLUDED.description,
@@ -646,7 +646,7 @@ class Phase1FoundationExtractor:
         # 4. Populate kb_Instrument
         print("    Populating kb_Instrument...")
         self.conn.execute("""
-            INSERT INTO kb_Instrument (kb_id, instrument_type, name, description, updated_at)
+            INSERT INTO kb_Instrument (kb_id, name, instrument_type, description, updated_at)
             SELECT
                 uuid() as kb_id,
                 instrument_name as name,
@@ -654,7 +654,7 @@ class Phase1FoundationExtractor:
                 NULL as description,
                 CURRENT_TIMESTAMP as updated_at
             FROM stage_instrument_extraction
-            WHERE usage_count >= 5  
+            WHERE usage_count >= 1  
             ON CONFLICT (name) DO NOTHING;
         """)
 
