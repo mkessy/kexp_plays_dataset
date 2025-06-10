@@ -187,7 +187,7 @@ def create_kb_mapping_tables():
             r.recording_data->>'title' as recording_title,
             UNNEST(r.attributes_array) as instrument_name
         FROM mb_relations_basic_v2 r
-        WHERE r.relation_type = 'instrument' 
+        WHERE r.relation_type IN ('instrument', 'performer')
           AND r.target_type = 'recording'
           AND r.attributes_array IS NOT NULL
           AND ARRAY_LENGTH(r.attributes_array) > 0
@@ -253,8 +253,7 @@ def create_kb_mapping_tables():
     LEFT JOIN kb_Song s ON r.target_entity_id = s.mb_recording_id AND r.target_type = 'recording'
     LEFT JOIN kb_Release rel ON r.target_entity_id = rel.mb_release_id AND r.target_type = 'release'
     LEFT JOIN kb_Role role ON r.relation_type = LOWER(role.name)
-    WHERE r.relation_type IN ('producer', 'composer', 'engineer', 'lyricist', 'writer')
-      AND r.target_type IN ('recording', 'release');
+      WHERE r.target_type IN ('recording', 'release', 'work');
     """)
 
     # 5. External Links mapping
