@@ -290,8 +290,8 @@ def create_kb_tables(conn: duckdb.DuckDBPyConnection):
         '''CREATE TABLE rel_Artist_Plays_Instrument (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
             kb_instrument_id UUID REFERENCES kb_Instrument(kb_id),
-            kb_recording_id UUID REFERENCES kb_Song(kb_id),
-            PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_recording_id)
+            kb_song_id UUID REFERENCES kb_Song(kb_id),
+            PRIMARY KEY (kb_artist_id, kb_instrument_id, kb_song_id)
         );''',
         '''CREATE TABLE rel_Artist_Has_Genre (
             kb_artist_id UUID REFERENCES kb_Artist(kb_id),
