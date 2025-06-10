@@ -33,6 +33,9 @@ comment_chunks_sample.jsonl
 chunk_evaluation_samples/
 chunk_evaluations/
 
+relationship_analysis/
+phase3_output/
+
 bertopic_kexp_results/
 
 # Archive
