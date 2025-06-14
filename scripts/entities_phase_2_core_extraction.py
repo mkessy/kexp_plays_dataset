@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 KEXP Knowledge Base - Phase 2 Core Entities Extraction
-Implementation for populating kb_Song, kb_Album, kb_Release, kb_Artist,
-and kb_Person entities.
+Implementation for populating kb_Song, kb_Album, kb_Release, kb_Artist
+aligned with simplified RDF schema (no kb_Person/kb_Instrument).
 """
 
 import duckdb
@@ -26,7 +26,6 @@ class Phase2CoreEntityExtractor:
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Connects to the DuckDB database."""
         try:
-            # Connect to the database, with extensions auto-loaded
             self.conn = duckdb.connect(self.db_path)
             print(f"✅ Connected to database: {self.db_path}")
             return self.conn
@@ -43,7 +42,7 @@ class Phase2CoreEntityExtractor:
 
         required_tables = [
             'mb_artists_raw', 'dim_artists_master', 'dim_tracks', 'dim_releases_master', 'fact_plays',
-            'kb_Artist', 'kb_Person', 'kb_Song', 'kb_Album', 'kb_Release',
+            'kb_Artist', 'kb_Song', 'kb_Album', 'kb_Release',  # Removed kb_Person
             'bridge_kb_artist_to_kexp', 'bridge_kb_song_to_kexp'
         ]
         all_exist = True
@@ -67,7 +66,7 @@ class Phase2CoreEntityExtractor:
         """Creates fresh staging tables for this extraction phase."""
         print("\n🏗️  Creating or replacing staging tables...")
         staging_tables = [
-            'stage_song_extraction', 'stage_artist_extraction', 'stage_person_extraction',
+            'stage_song_extraction', 'stage_artist_extraction',
             'stage_album_extraction', 'stage_release_extraction'
         ]
         for table in staging_tables:
@@ -79,29 +78,19 @@ class Phase2CoreEntityExtractor:
                 kexp_track_id_internal UUID PRIMARY KEY,
                 title VARCHAR NOT NULL,
                 mb_recording_id UUID,
-                mb_work_id UUID
+                length_ms INTEGER
             )
         """)
 
-        # Staging table for Artists
+        # Staging table for Artists (simplified - no person handling)
         self.conn.execute("""
             CREATE TABLE stage_artist_extraction (
                 kexp_artist_id_internal UUID PRIMARY KEY,
                 name VARCHAR NOT NULL,
                 mb_artist_id UUID,
                 artist_type VARCHAR,
-                country_code VARCHAR(3),
-                begin_date_year INTEGER,
-                end_date_year INTEGER,
-                is_person BOOLEAN
-            )
-        """)
-
-        # Staging table for Persons (derived from Artists of type Person)
-        self.conn.execute("""
-            CREATE TABLE stage_person_extraction (
-                mb_person_id UUID PRIMARY KEY,
-                common_name VARCHAR NOT NULL,
+                begin_date DATE,
+                end_date DATE,
                 disambiguation VARCHAR
             )
         """)
@@ -110,7 +99,10 @@ class Phase2CoreEntityExtractor:
         self.conn.execute("""
             CREATE TABLE stage_album_extraction (
                 mb_release_group_id UUID PRIMARY KEY,
-                title VARCHAR NOT NULL
+                title VARCHAR NOT NULL,
+                primary_type VARCHAR,
+                secondary_types VARCHAR,
+                first_release_date DATE
             )
         """)
 
@@ -122,8 +114,7 @@ class Phase2CoreEntityExtractor:
                 mb_release_id UUID,
                 mb_release_group_id UUID,
                 release_date DATE,
-                country_code VARCHAR(3),
-                format VARCHAR,
+                country VARCHAR,
                 barcode VARCHAR
             )
         """)
@@ -133,12 +124,11 @@ class Phase2CoreEntityExtractor:
         """Extracts song (recording) data from dim_tracks into a staging table."""
         print("\n🎵 Extracting songs to staging...")
         self.conn.execute("""
-            INSERT INTO stage_song_extraction(kexp_track_id_internal, title, mb_recording_id, mb_work_id)
+            INSERT INTO stage_song_extraction(kexp_track_id_internal, title, mb_recording_id)
             SELECT
                 track_id_internal,
                 primary_song_title_observed,
                 mb_recording_id,
-                mb_track_id -- Assuming mb_track_id maps to a work-like concept for now
             FROM dim_tracks;
         """)
         count = self.conn.execute(
@@ -149,8 +139,7 @@ class Phase2CoreEntityExtractor:
         """Extracts artist data from KEXP and MusicBrainz into a staging table."""
         print("\n👨‍🎤 Extracting artists to staging...")
 
-        # This query joins KEXP's artist dimension with the raw MB data to get artist type and life span.
-        # It uses try_cast(regexp_extract(...)) to safely parse the year from potentially malformed date strings.
+        # Simplified artist extraction - no person/group distinction
         self.conn.execute("""
             INSERT INTO stage_artist_extraction
             SELECT
@@ -164,56 +153,52 @@ class Phase2CoreEntityExtractor:
                     WHEN mb.type = 'Character' THEN 'CHARACTER'
                     ELSE 'OTHER' 
                 END as artist_type,
-                mb.country as country_code,
-                -- FIX: Use try_cast to handle conversion errors gracefully.
-                try_cast(regexp_extract(mb."life-span".begin, '(\\d{4})', 1) AS INTEGER) as begin_date_year,
-                try_cast(regexp_extract(mb."life-span".end, '(\\d{4})', 1) AS INTEGER) as end_date_year,
-                mb.type = 'Person' as is_person
+                -- Parse date strings to proper DATE format
+                CASE 
+                    WHEN regexp_extract(mb."life-span".begin, '(\\d{4}-\\d{2}-\\d{2})', 1) IS NOT NULL 
+                    THEN try_cast(regexp_extract(mb."life-span".begin, '(\\d{4}-\\d{2}-\\d{2})', 1) AS DATE)
+                    WHEN regexp_extract(mb."life-span".begin, '(\\d{4})', 1) IS NOT NULL
+                    THEN try_cast(regexp_extract(mb."life-span".begin, '(\\d{4})', 1) || '-01-01' AS DATE)
+                    ELSE NULL
+                END as begin_date,
+                CASE 
+                    WHEN regexp_extract(mb."life-span".end, '(\\d{4}-\\d{2}-\\d{2})', 1) IS NOT NULL 
+                    THEN try_cast(regexp_extract(mb."life-span".end, '(\\d{4}-\\d{2}-\\d{2})', 1) AS DATE)
+                    WHEN regexp_extract(mb."life-span".end, '(\\d{4})', 1) IS NOT NULL
+                    THEN try_cast(regexp_extract(mb."life-span".end, '(\\d{4})', 1) || '-01-01' AS DATE)
+                    ELSE NULL
+                END as end_date,
+                mb.disambiguation
             FROM dim_artists_master AS kexp
-            LEFT JOIN mb_artists_raw AS mb ON kexp.mb_id = CAST(mb.id AS UUID);
+            LEFT JOIN mb_artists_raw AS mb ON kexp.mb_id = CAST(mb.id AS UUID)
+            WHERE kexp.mb_id IS NOT NULL AND kexp.mb_id != 'None'
         """)
         count = self.conn.execute(
             "SELECT COUNT(*) FROM stage_artist_extraction").fetchone()[0]
         print(f"  - ✅ Extracted {count:,} total artists to staging.")
 
-    def extract_persons_to_staging(self):
-        """Extracts Person data from artists identified as persons."""
-        print("\n👤 Extracting persons to staging...")
-        self.conn.execute("""
-            INSERT INTO stage_person_extraction(mb_person_id, common_name, disambiguation)
-            SELECT DISTINCT
-                mb.mb_artist_id,
-                mb.name,
-                mb_raw.disambiguation
-            FROM stage_artist_extraction AS mb
-            JOIN mb_artists_raw AS mb_raw ON mb.mb_artist_id = CAST(mb_raw.id AS UUID)
-            WHERE mb.is_person = TRUE AND mb.mb_artist_id IS NOT NULL;
-        """)
-        count = self.conn.execute(
-            "SELECT COUNT(*) FROM stage_person_extraction").fetchone()[0]
-        print(f"  - ✅ Extracted {count:,} persons to staging.")
-
     def extract_albums_releases_to_staging(self):
         """Extracts Album (Release Group) and Release data into staging tables."""
         print("\n💿 Extracting albums and releases to staging...")
 
-        # FIX: Correctly handle duplicate release group IDs by selecting one definitive title.
-        # Here we group by the release_group_id and choose the most frequent title for that group, weighted by play count.
+        # Extract unique release groups with the most frequently used title
         self.conn.execute("""
-            INSERT INTO stage_album_extraction(mb_release_group_id, title)
+            INSERT INTO stage_album_extraction(mb_release_group_id, title, first_release_date)
             SELECT
                 mb_release_group_id,
-                arg_max(primary_album_name_observed, play_count) AS title
+                arg_max(primary_album_name_observed, play_count) AS title,
+                MIN(release_date_iso) as first_release_date
             FROM (
                 SELECT
                     r.mb_release_group_id,
                     r.primary_album_name_observed,
+                    r.release_date_iso,
                     count(p.play_id) as play_count
                 FROM dim_releases_master r
                 JOIN dim_tracks t ON r.release_id_internal = t.release_id_internal_on_track
                 JOIN fact_plays p ON t.track_id_internal = p.track_id_internal
                 WHERE r.mb_release_group_id IS NOT NULL
-                GROUP BY r.mb_release_group_id, r.primary_album_name_observed
+                GROUP BY r.mb_release_group_id, r.primary_album_name_observed, r.release_date_iso
             ) AS release_group_titles
             GROUP BY mb_release_group_id;
         """)
@@ -242,51 +227,34 @@ class Phase2CoreEntityExtractor:
         print("\n📝 Populating final KB tables from staged data...")
 
         # --- Populate Entity Tables ---
-        # Populate kb_Person
+        # Populate kb_Artist (simplified - no person linking)
         self.conn.execute("""
-            INSERT INTO kb_Person (kb_id, mb_person_id, common_name, disambiguation, updated_at)
-            SELECT uuid(), mb_person_id, common_name, disambiguation, CURRENT_TIMESTAMP
-            FROM stage_person_extraction
-            ON CONFLICT (mb_person_id) DO NOTHING;
-        """)
-        print(f"  - Populated kb_Person.")
-
-        # Populate kb_Artist
-        self.conn.execute("""
-            -- Insert artists that are persons, linking to kb_Person
-            INSERT INTO kb_Artist(kb_id, name, mb_artist_id, kb_artist_type, kb_person_id, disambiguation, updated_at)
-            SELECT
-                uuid(),
-                sa.name,
-                sa.mb_artist_id,
-                sa.artist_type::artist_type,
-                p.kb_id,
-                sp.disambiguation,
-                CURRENT_TIMESTAMP
-            FROM stage_artist_extraction sa
-            JOIN stage_person_extraction sp ON sa.mb_artist_id = sp.mb_person_id
-            JOIN kb_Person p ON sa.mb_artist_id = p.mb_person_id
-            WHERE sa.is_person = TRUE
-            ON CONFLICT (mb_artist_id) DO NOTHING;
-
-            -- Insert artists that are not persons (and have an MB ID)
-            INSERT INTO kb_Artist(kb_id, name, mb_artist_id, kb_artist_type, updated_at)
-            SELECT 
-                uuid(), 
-                name, 
-                mb_artist_id, 
-                artist_type::artist_type, 
-                CURRENT_TIMESTAMP
-            FROM stage_artist_extraction
-            WHERE (is_person = FALSE OR is_person IS NULL) AND mb_artist_id IS NOT NULL
-            ON CONFLICT (mb_artist_id) DO NOTHING;
-            
-            -- FIX: Insert artists with no MB ID, checking for existence first.
-            INSERT INTO kb_Artist(kb_id, name, kb_artist_type, updated_at)
+            INSERT INTO kb_Artist(kb_id, name, sort_name, type, mb_artist_id, begin_date, end_date, disambiguation, created_at, updated_at)
             SELECT
                 uuid(),
                 name,
+                name as sort_name,  -- Use name as sort_name for now
+                artist_type::artist_type,
+                mb_artist_id,
+                begin_date,
+                end_date,
+                disambiguation,
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            FROM stage_artist_extraction
+            WHERE mb_artist_id IS NOT NULL
+            ON CONFLICT (mb_artist_id) DO NOTHING;
+        """)
+
+        # Insert artists without MB ID (avoid duplicates by name)
+        self.conn.execute("""
+            INSERT INTO kb_Artist(kb_id, name, sort_name, type, created_at, updated_at)
+            SELECT
+                uuid(),
+                name,
+                name as sort_name,
                 'OTHER'::artist_type,
+                CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             FROM stage_artist_extraction sa
             WHERE sa.mb_artist_id IS NULL 
@@ -295,70 +263,86 @@ class Phase2CoreEntityExtractor:
                 WHERE ka.name = sa.name AND ka.mb_artist_id IS NULL
             );
         """)
-        print(f"  - Populated kb_Artist.")
-
-        # Populate kb_Song
-        self.conn.execute("""
-            -- Songs with MB ID
-            INSERT INTO kb_Song(kb_id, title, mb_recording_id, updated_at)
-            SELECT uuid(), title, mb_recording_id, CURRENT_TIMESTAMP
-            FROM stage_song_extraction
-            WHERE mb_recording_id IS NOT NULL
-            ON CONFLICT (mb_recording_id) DO NOTHING;
-
-            -- Songs without MB ID (cannot use ON CONFLICT without a unique key)
-            -- This assumes titles are unique enough for this initial load
-            INSERT INTO kb_Song(kb_id, title, updated_at)
-            SELECT uuid(), title, CURRENT_TIMESTAMP
-            FROM stage_song_extraction
-            WHERE mb_recording_id IS NULL;
-        """)
-        print(f"  - Populated kb_Song.")
+        artist_count = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Artist").fetchone()[0]
+        print(f"  - Populated kb_Artist: {artist_count:,} entities")
 
         # Populate kb_Album
         self.conn.execute("""
-            INSERT INTO kb_Album(kb_id, title, mb_release_group_id, updated_at)
-            SELECT uuid(), title, mb_release_group_id, CURRENT_TIMESTAMP
+            INSERT INTO kb_Album(kb_id, title, mb_release_group_id, primary_type, first_release_date, created_at, updated_at)
+            SELECT 
+                uuid(), 
+                title, 
+                mb_release_group_id, 
+                primary_type,
+                first_release_date,
+                CURRENT_TIMESTAMP, 
+                CURRENT_TIMESTAMP
             FROM stage_album_extraction
             ON CONFLICT (mb_release_group_id) DO NOTHING;
         """)
-        print(f"  - Populated kb_Album.")
+        album_count = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Album").fetchone()[0]
+        print(f"  - Populated kb_Album: {album_count:,} entities")
 
-        # Populate kb_Release
+        # Populate kb_Release (link to albums where possible)
         self.conn.execute("""
-            -- Releases with album link
-            INSERT INTO kb_Release(kb_id, title, mb_release_id, album_id, release_date, updated_at)
+            INSERT INTO kb_Release(kb_id, title, mb_release_id, album_id, release_date, created_at, updated_at)
             SELECT
                 uuid(),
                 sr.title,
                 sr.mb_release_id,
                 ka.kb_id,
                 sr.release_date,
+                CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             FROM stage_release_extraction sr
-            JOIN kb_Album ka ON sr.mb_release_group_id = ka.mb_release_group_id
+            LEFT JOIN kb_Album ka ON sr.mb_release_group_id = ka.mb_release_group_id
             WHERE sr.mb_release_id IS NOT NULL
             ON CONFLICT (mb_release_id) DO NOTHING;
-
-            -- Releases without album link
-            INSERT INTO kb_Release(kb_id, title, mb_release_id, release_date, updated_at)
-            SELECT uuid(), title, mb_release_id, release_date, CURRENT_TIMESTAMP
-            FROM stage_release_extraction
-            WHERE mb_release_group_id IS NULL AND mb_release_id IS NOT NULL
-            ON CONFLICT (mb_release_id) DO NOTHING;
         """)
-        print(f"  - Populated kb_Release.")
+        release_count = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Release").fetchone()[0]
+        print(f"  - Populated kb_Release: {release_count:,} entities")
 
-        # Populate kb_RecordLabel
+        # Populate kb_Song
         self.conn.execute("""
-            INSERT INTO kb_RecordLabel(kb_id, name, mb_label_id, updated_at)
-            SELECT uuid(), label_name as name, label_id as mb_label_id, CURRENT_TIMESTAMP
-            FROM canonical_labels  
-            ON CONFLICT (name) DO NOTHING;
+            INSERT INTO kb_Song(kb_id, title, length_ms, mb_recording_id, created_at, updated_at)
+            SELECT 
+                uuid(), 
+                title, 
+                length_ms,
+                mb_recording_id, 
+                CURRENT_TIMESTAMP, 
+                CURRENT_TIMESTAMP
+            FROM stage_song_extraction
+            WHERE mb_recording_id IS NOT NULL
+            ON CONFLICT (mb_recording_id) DO NOTHING;
         """)
+
+        # Insert songs without MB ID (careful with duplicates)
+        self.conn.execute("""
+            INSERT INTO kb_Song(kb_id, title, length_ms, created_at, updated_at)
+            SELECT 
+                uuid(), 
+                title, 
+                length_ms,
+                CURRENT_TIMESTAMP, 
+                CURRENT_TIMESTAMP
+            FROM stage_song_extraction
+            WHERE mb_recording_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM kb_Song ks 
+                WHERE ks.title = stage_song_extraction.title AND ks.mb_recording_id IS NULL
+            );
+        """)
+        song_count = self.conn.execute(
+            "SELECT COUNT(*) FROM kb_Song").fetchone()[0]
+        print(f"  - Populated kb_Song: {song_count:,} entities")
 
         # --- Populate Bridge Tables ---
         print("\n🔗 Populating bridge tables for traceability...")
+
         # Bridge artists with MB IDs
         self.conn.execute("""
             INSERT INTO bridge_kb_artist_to_kexp (kb_artist_id, kexp_artist_id_internal)
@@ -370,7 +354,8 @@ class Phase2CoreEntityExtractor:
             WHERE sa.mb_artist_id IS NOT NULL
             ON CONFLICT DO NOTHING;
         """)
-        # Bridge artists without MB IDs
+
+        # Bridge artists without MB IDs (match by name)
         self.conn.execute("""
             INSERT INTO bridge_kb_artist_to_kexp (kb_artist_id, kexp_artist_id_internal)
             SELECT
@@ -390,36 +375,53 @@ class Phase2CoreEntityExtractor:
                 ss.kexp_track_id_internal
             FROM stage_song_extraction ss
             JOIN kb_Song ks ON ss.mb_recording_id = ks.mb_recording_id
-            WHERE ss.kexp_track_id_internal IS NOT NULL
-            ON CONFLICT DO NOTHING;
-        """)
-        # Bridge songs without MB IDs
-        self.conn.execute("""
-            INSERT INTO bridge_kb_song_to_kexp (kb_song_id, kexp_track_id_internal)
-            SELECT
-                ks.kb_id,
-                ss.kexp_track_id_internal
-            FROM stage_song_extraction ss
-            JOIN kb_Song ks ON ss.title = ks.title AND ks.mb_recording_id IS NULL
-            WHERE ss.kexp_track_id_internal IS NOT NULL
+            WHERE ss.mb_recording_id IS NOT NULL
             ON CONFLICT DO NOTHING;
         """)
 
-        print("  - ✅ Bridge tables populated.")
+        # Skip songs without MB IDs to avoid cartesian product issue
+        # This commented section was causing the 7 million entity problem
+        # self.conn.execute("""
+        #     INSERT INTO bridge_kb_song_to_kexp (kb_song_id, kexp_track_id_internal)
+        #     SELECT
+        #         MIN(ks.kb_id) as kb_song_id,
+        #         ss.kexp_track_id_internal
+        #     FROM stage_song_extraction ss
+        #     JOIN kb_Song ks ON ss.title = ks.title AND ks.mb_recording_id IS NULL
+        #     WHERE ss.mb_recording_id IS NULL
+        #     GROUP BY ss.kexp_track_id_internal
+        #     ON CONFLICT DO NOTHING;
+        # """)
+        print("  - ⚠️ Skipping non-MusicBrainz ID songs to avoid cartesian product issues")
+
+        # Get bridge table counts
+        artist_bridge_count = self.conn.execute(
+            "SELECT COUNT(*) FROM bridge_kb_artist_to_kexp").fetchone()[0]
+        song_bridge_count = self.conn.execute(
+            "SELECT COUNT(*) FROM bridge_kb_song_to_kexp").fetchone()[0]
+
+        print(f"  - ✅ Bridge tables populated:")
+        print(f"    - Artist mappings: {artist_bridge_count:,}")
+        print(f"    - Song mappings: {song_bridge_count:,}")
 
         print("\n📊 PHASE 2 COMPLETION SUMMARY")
         print(f"{'='*50}")
-        for table in ['kb_Song', 'kb_Artist', 'kb_Person', 'kb_Album', 'kb_Release', 'bridge_kb_artist_to_kexp', 'bridge_kb_song_to_kexp']:
-            count = self.conn.execute(
-                f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            print(f"  - Total entities in {table}: {count:,}")
+        for table_name, count in [
+            ('kb_Artist', artist_count),
+            ('kb_Song', song_count),
+            ('kb_Album', album_count),
+            ('kb_Release', release_count),
+            ('bridge_kb_artist_to_kexp', artist_bridge_count),
+            ('bridge_kb_song_to_kexp', song_bridge_count)
+        ]:
+            print(f"  {table_name:<25} {count:>10,} entities")
 
     def cleanup_staging_tables(self, keep_staging: bool = True):
         """Optionally cleans up staging tables."""
         if not keep_staging:
             print("\n🧹 Cleaning up staging tables...")
             staging_tables = [
-                'stage_song_extraction', 'stage_artist_extraction', 'stage_person_extraction',
+                'stage_song_extraction', 'stage_artist_extraction',
                 'stage_album_extraction', 'stage_release_extraction'
             ]
             for table in staging_tables:
@@ -440,7 +442,6 @@ class Phase2CoreEntityExtractor:
             self.create_staging_tables()
             self.extract_songs_to_staging()
             self.extract_artists_to_staging()
-            self.extract_persons_to_staging()
             self.extract_albums_releases_to_staging()
 
             self.populate_kb_tables()
