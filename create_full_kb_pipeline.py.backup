@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+"""
+KEXP Knowledge Base - Unified Pipeline
+=====================================
+A comprehensive pipeline script that executes the entire KEXP knowledge base creation process
+from raw data download through entity creation and relationship population.
+
+The pipeline consists of these main phases:
+1. Download raw KEXP data (plays, shows, hosts, programs, timeslots)
+2. Normalize data into a consistent format
+3. Ingest normalized data into DuckDB
+4. Create Knowledge Base schema
+5. Extract and populate core entities (Artist, Song, Album, Release)
+6. Populate supporting entities (Genre, Location, Label, etc.)
+7. Create RDF-style relationships between entities
+8. Validate the knowledge base
+
+Usage:
+    python create_full_kb_pipeline.py [--skip-download] [--skip-normalization] 
+                                     [--rebuild-schema] [--force] [--validate-only]
+"""
+
+import argparse
+import logging
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+import duckdb
+import importlib.util
+import json
+from typing import Dict, List, Any, Optional, Tuple
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(f"kb_pipeline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    ]
+)
+logger = logging.getLogger("kb_pipeline")
+
+# Configuration
+DB_PATH = os.getenv("DB_PATH", "kexp_data.db")
+NORMALIZED_DIR = os.getenv("NORMALIZED_DIR", "normalized_kexp_jsonl/")
+DATA_DIR = os.getenv("RAW_DIR", "data/")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "unified_triples/")
+
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Pipeline component metadata
+PIPELINE_COMPONENTS = {
+    "download": {
+        "description": "Download raw KEXP data",
+        "inputs": [],
+        "outputs": [f"{DATA_DIR}kexp_plays.jsonl"],
+        "script": "download.py"
+    },
+    "normalize": {
+        "description": "Normalize KEXP data into structured format",
+        "inputs": [f"{DATA_DIR}kexp_plays.jsonl"],
+        "outputs": [f"{NORMALIZED_DIR}fact_plays.jsonl", f"{NORMALIZED_DIR}dim_artists_master.jsonl"],
+        "script": "normalize_kexp.py"
+    },
+    "ingest": {
+        "description": "Load normalized data into DuckDB",
+        "inputs": [f"{NORMALIZED_DIR}fact_plays.jsonl"],
+        "outputs": ["fact_plays", "dim_artists_master"],
+        "script": "ingest_kexp_data.py"
+    },
+    "kb_schema": {
+        "description": "Create knowledge base schema",
+        "inputs": [],
+        "outputs": ["kb_Artist", "kb_Song", "kb_Album", "kb_Release", "kb_Relationship"],
+        "script": "create_kb_phase_0_1_2.py" 
+    },
+    "foundation_extraction": {
+        "description": "Extract foundation data from MusicBrainz",
+        "inputs": ["mb_artists_raw"],
+        "outputs": ["stage_artist_extraction", "stage_location_extraction"],
+        "script": "scripts/entities_phase_1_foundation_extraction.py"
+    },
+    "core_extraction": {
+        "description": "Create core KB entities",
+        "inputs": ["stage_artist_extraction", "dim_artists_master"],
+        "outputs": ["kb_Artist", "kb_Song", "kb_Album", "kb_Release"],
+        "script": "scripts/entities_phase_2_core_extraction.py"
+    },
+    "relationship_extraction": {
+        "description": "Create RDF triple relationships",
+        "inputs": ["kb_Artist", "kb_Song", "mb_relations_basic_v2"],
+        "outputs": ["kb_Relationship"],
+        "script": "scripts/entities_phase_3_v2_analysis.py"
+    }
+}
+
+
+class PipelineStage:
+    """Base class for pipeline stages with execution and timing."""
+    
+    def __init__(self, name, skip=False):
+        self.name = name
+        self.skip = skip
+        self.start_time = None
+        self.end_time = None
+        
+    def execute(self):
+        """Execute the pipeline stage."""
+        if self.skip:
+            logger.info(f"Skipping stage: {self.name}")
+            return True
+            
+        logger.info(f"Starting stage: {self.name}")
+        self.start_time = time.time()
+        success = self._run()
+        self.end_time = time.time()
+        
+        duration = self.end_time - self.start_time
+        if success:
+            logger.info(f"Completed stage: {self.name} in {duration:.2f} seconds")
+        else:
+            logger.error(f"Failed stage: {self.name} after {duration:.2f} seconds")
+        
+        return success
+    
+    def _run(self):
+        """Implementation of the actual stage logic. Override in subclasses."""
+        raise NotImplementedError("Subclasses must implement _run()")
+
+
+class RunScriptStage(PipelineStage):
+    """Stage that runs a Python script."""
+    
+    def __init__(self, name, script_path, skip=False, args=None):
+        super().__init__(name, skip)
+        self.script_path = script_path
+        self.args = args or []
+        
+    def _run(self):
+        try:
+            cmd = [sys.executable, self.script_path] + self.args
+            logger.info(f"Running command: {' '.join(cmd)}")
+            
+            result = subprocess.run(
+                cmd, 
+                check=True, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Log script output at debug level
+            for line in result.stdout.splitlines():
+                logger.debug(f"STDOUT: {line}")
+            
+            logger.info(f"Script {self.script_path} completed successfully")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Script {self.script_path} failed with exit code {e.returncode}")
+            logger.error(f"STDERR: {e.stderr}")
+            return False
+        except Exception as e:
+            logger.error(f"Error running script {self.script_path}: {e}")
+            return False
+
+
+class ImportScriptStage(PipelineStage):
+    """Stage that imports and runs a Python module function."""
+    
+    def __init__(self, name, script_path, function_name="main", skip=False):
+        super().__init__(name, skip)
+        self.script_path = script_path
+        self.function_name = function_name
+        
+    def _run(self):
+        try:
+            # Import the module
+            spec = importlib.util.spec_from_file_location("module", self.script_path)
+            if not spec or not spec.loader:
+                logger.error(f"Could not load module from {self.script_path}")
+                return False
+                
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            
+            # Get and call the main function
+            main_fn = getattr(module, self.function_name)
+            main_fn()
+            
+            logger.info(f"Module {self.script_path} function {self.function_name} executed successfully")
+            return True
+            
+        except AttributeError:
+            logger.error(f"Function {self.function_name} not found in module {self.script_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Error running module {self.script_path}: {e}")
+            return False
+
+
+class DatabaseValidationStage(PipelineStage):
+    """Stage that validates the database state by checking table counts."""
+    
+    def __init__(self, name, skip=False):
+        super().__init__(name, skip)
+        
+    def _run(self):
+        try:
+            conn = duckdb.connect(DB_PATH)
+            
+            # Check core entity tables
+            core_tables = [
+                "kb_Artist", "kb_Song", "kb_Album", "kb_Release", 
+                "kb_Genre", "kb_Location", "kb_RecordLabel"
+            ]
+            
+            # Check if tables exist
+            existing_tables = conn.execute("""
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_name LIKE 'kb_%' OR table_name LIKE 'rel_%' OR table_name LIKE 'bridge_%'
+            """).fetchdf()
+            existing_table_names = set(existing_tables['table_name'].tolist())
+            
+            logger.info(f"Found {len(existing_table_names)} KB-related tables in database")
+            
+            # Check for missing core tables
+            missing_tables = [table for table in core_tables if table not in existing_table_names]
+            if missing_tables:
+                logger.error(f"Missing core tables: {', '.join(missing_tables)}")
+                return False
+                
+            # Get counts for core tables
+            table_counts = {}
+            for table in core_tables:
+                count_result = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                count = count_result[0] if count_result else 0
+                table_counts[table] = count
+                
+            # Check kb_Relationship table
+            if "kb_Relationship" in existing_table_names:
+                relation_count = conn.execute("SELECT COUNT(*) FROM kb_Relationship").fetchone()[0]
+                relation_types_count = conn.execute(
+                    "SELECT COUNT(DISTINCT predicate) FROM kb_Relationship"
+                ).fetchone()[0]
+                
+                # Get top predicates
+                top_predicates = conn.execute("""
+                    SELECT predicate, COUNT(*) as count 
+                    FROM kb_Relationship 
+                    GROUP BY predicate 
+                    ORDER BY count DESC 
+                    LIMIT 5
+                """).fetchdf()
+            else:
+                logger.error("kb_Relationship table not found")
+                return False
+            
+            # Check bridge tables
+            bridge_tables = [table for table in existing_table_names if table.startswith("bridge_kb_")]
+            bridge_counts = {}
+            for table in bridge_tables:
+                count_result = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                count = count_result[0] if count_result else 0
+                bridge_counts[table] = count
+            
+            # Log validation results
+            logger.info("Knowledge Base Validation Results:")
+            logger.info("=================================")
+            for table, count in table_counts.items():
+                logger.info(f"{table}: {count:,} entities")
+            logger.info(f"kb_Relationship: {relation_count:,} relationships")
+            logger.info(f"Unique relationship types: {relation_types_count}")
+            
+            logger.info("Top 5 relationship predicates:")
+            for _, row in top_predicates.iterrows():
+                logger.info(f"  {row['predicate']}: {row['count']:,}")
+                
+            logger.info("Bridge tables:")
+            for table, count in bridge_counts.items():
+                logger.info(f"  {table}: {count:,} mappings")
+            
+            # Export validation summary
+            validation_report = {
+                "timestamp": datetime.now().isoformat(),
+                "entity_counts": table_counts,
+                "relationship_count": relation_count,
+                "relationship_types_count": relation_types_count,
+                "top_predicates": top_predicates.to_dict(orient='records'),
+                "bridge_counts": bridge_counts
+            }
+            
+            report_path = os.path.join(OUTPUT_DIR, f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            with open(report_path, 'w') as f:
+                json.dump(validation_report, f, indent=2, default=str)
+            logger.info(f"Validation report saved to {report_path}")
+            
+            # Check for any empty core tables
+            empty_tables = [table for table, count in table_counts.items() if count == 0]
+            if empty_tables:
+                logger.warning(f"Empty core tables detected: {', '.join(empty_tables)}")
+                return False
+                
+            # Check if we have relationships
+            if relation_count == 0:
+                logger.warning("No relationships found in kb_Relationship table")
+                return False
+                
+            logger.info("Knowledge base validation passed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Database validation failed: {e}")
+            return False
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
+
+class PipelineComponent:
+    """Represents a component of the pipeline with its metadata and dependencies."""
+    
+    def __init__(self, name: str, description: str, script: str, 
+                 inputs: List[str], outputs: List[str], enabled: bool = True):
+        self.name = name
+        self.description = description
+        self.script = script
+        self.inputs = inputs
+        self.outputs = outputs
+        self.enabled = enabled
+        
+    def validate_inputs(self, conn: Optional[duckdb.DuckDBPyConnection] = None) -> bool:
+        """Validate that required inputs exist."""
+        missing_inputs = []
+        
+        for input_item in self.inputs:
+            # Handle file inputs
+            if input_item.startswith('/') or '/' in input_item:
+                if not os.path.exists(input_item):
+                    missing_inputs.append(input_item)
+            # Handle database tables
+            elif conn is not None:
+                try:
+                    result = conn.execute(
+                        f"SELECT count(*) FROM information_schema.tables WHERE table_name = '{input_item}'").fetchone()
+                    if result[0] == 0:
+                        missing_inputs.append(input_item)
+                except Exception:
+                    missing_inputs.append(input_item)
+        
+        if missing_inputs:
+            logger.warning(f"Component {self.name} is missing inputs: {', '.join(missing_inputs)}")
+            return False
+        
+        return True
+        
+    def create_stage(self, args) -> PipelineStage:
+        """Create appropriate pipeline stage based on script type."""
+        skip = not self.enabled
+        
+        # Handle special cases
+        if self.name == "download" and args.skip_download:
+            skip = True
+        elif self.name in ["normalize", "ingest"] and args.skip_normalization:
+            skip = True
+        elif self.name == "kb_schema" and not (args.rebuild_schema or args.force):
+            skip = True
+            
+        # Create the appropriate stage type
+        if self.name == "validate":
+            return DatabaseValidationStage(
+                f"{self.name}: {self.description}",
+                skip=skip
+            )
+        elif os.path.dirname(self.script) == "":
+            return RunScriptStage(
+                f"{self.name}: {self.description}",
+                self.script,
+                skip=skip
+            )
+        else:
+            return ImportScriptStage(
+                f"{self.name}: {self.description}",
+                self.script,
+                skip=skip
+            )
+
+
+def create_pipeline(args):
+    """Create the pipeline with all stages based on component metadata."""
+    # Create pipeline components from metadata
+    components = []
+    
+    # Basic components from the PIPELINE_COMPONENTS metadata
+    for name, meta in PIPELINE_COMPONENTS.items():
+        components.append(PipelineComponent(
+            name=name,
+            description=meta["description"],
+            script=meta["script"],
+            inputs=meta["inputs"],
+            outputs=meta["outputs"],
+            enabled=True
+        ))
+    
+    # Add specialized components
+    components.extend([
+        PipelineComponent(
+            name="genre_location_label",
+            description="Populate genre, location, and label relationships",
+            script="scripts/entities_phase_4_genre_location_label.py",
+            inputs=["kb_Artist", "kb_Song", "kb_Genre", "kb_Location"],
+            outputs=["kb_Relationship"],
+            enabled=True
+        ),
+        PipelineComponent(
+            name="complete_record_label",
+            description="Complete record label entities",
+            script="scripts/entities_phase_4_complete_record_label.py",
+            inputs=["kb_RecordLabel", "dim_labels_master"],
+            outputs=["kb_RecordLabel"],
+            enabled=True
+        ),
+        PipelineComponent(
+            name="kexp_broadcast",
+            description="Populate KEXP broadcast relationships",
+            script="scripts/entities_phase_5_kexp_broadcast.py",
+            inputs=["kb_Artist", "kb_Song", "fact_plays", "dim_shows"],
+            outputs=["kb_Host", "kb_Program", "kb_Show", "kb_Play", "kb_Relationship"],
+            enabled=True
+        ),
+        PipelineComponent(
+            name="release_label_relationships",
+            description="Create release-label relationships",
+            script="scripts/create_release_label_relationships.py",
+            inputs=["kb_Release", "kb_RecordLabel"],
+            outputs=["kb_Relationship"],
+            enabled=True
+        ),
+        PipelineComponent(
+            name="validate",
+            description="Validate Knowledge Base",
+            script="validation",
+            inputs=[],
+            outputs=[],
+            enabled=True
+        )
+    ])
+    
+    # Validate component dependencies (if possible)
+    try:
+        conn = duckdb.connect(DB_PATH, read_only=True)
+        for component in components:
+            component.validate_inputs(conn)
+    except Exception as e:
+        logger.warning(f"Could not validate component dependencies: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+    
+    # Skip everything except validation if requested
+    if args.validate_only:
+        for component in components:
+            if component.name != "validate":
+                component.enabled = False
+    
+    # Create stages from components
+    stages = [component.create_stage(args) for component in components]
+    
+    # Generate pipeline summary
+    logger.info("Pipeline Configuration:")
+    logger.info("=======================")
+    for i, stage in enumerate(stages, 1):
+        status = "ENABLED" if not stage.skip else "SKIPPED"
+        logger.info(f"{i}. {stage.name} - {status}")
+    
+    return stages
+
+
+def main():
+    parser = argparse.ArgumentParser(description="KEXP Knowledge Base Unified Pipeline")
+    parser.add_argument("--skip-download", action="store_true", help="Skip downloading raw data")
+    parser.add_argument("--skip-normalization", action="store_true", help="Skip normalization and ingestion")
+    parser.add_argument("--rebuild-schema", action="store_true", help="Force rebuild of KB schema")
+    parser.add_argument("--force", action="store_true", help="Force execution of all stages")
+    parser.add_argument("--validate-only", action="store_true", help="Only validate the database")
+    parser.add_argument("--component", type=str, help="Run only a specific component and its dependencies")
+    parser.add_argument("--from-component", type=str, help="Start pipeline from a specific component")
+    parser.add_argument("--output-dir", type=str, help=f"Output directory (default: {OUTPUT_DIR})")
+    
+    args = parser.parse_args()
+    
+    # Update output dir if specified
+    if args.output_dir:
+        global OUTPUT_DIR
+        OUTPUT_DIR = args.output_dir
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        logger.info(f"Set output directory to {OUTPUT_DIR}")
+    
+    # Create pipeline
+    pipeline = create_pipeline(args)
+    
+    # Filter pipeline based on --component or --from-component
+    if args.component:
+        filtered_pipeline = []
+        found = False
+        for stage in pipeline:
+            if args.component in stage.name:
+                filtered_pipeline.append(stage)
+                found = True
+                
+        if not found:
+            logger.error(f"Component '{args.component}' not found in pipeline")
+            return 1
+            
+        pipeline = filtered_pipeline
+        logger.info(f"Running only component: {args.component}")
+        
+    elif args.from_component:
+        filtered_pipeline = []
+        found = False
+        for stage in pipeline:
+            if found or args.from_component in stage.name:
+                filtered_pipeline.append(stage)
+                found = True
+                
+        if not found:
+            logger.error(f"Component '{args.from_component}' not found in pipeline")
+            return 1
+            
+        pipeline = filtered_pipeline
+        logger.info(f"Starting pipeline from component: {args.from_component}")
+    
+    # Execute pipeline
+    logger.info(f"Starting KEXP Knowledge Base Unified Pipeline with {len(pipeline)} stages")
+    start_time = time.time()
+    
+    # Create summary report
+    pipeline_report = {
+        "start_time": datetime.now().isoformat(),
+        "pipeline_config": {
+            "skip_download": args.skip_download,
+            "skip_normalization": args.skip_normalization,
+            "rebuild_schema": args.rebuild_schema,
+            "force": args.force,
+            "validate_only": args.validate_only,
+            "component": args.component,
+            "from_component": args.from_component,
+            "output_dir": OUTPUT_DIR
+        },
+        "stages": [],
+        "success": True
+    }
+    
+    success = True
+    for i, stage in enumerate(pipeline, 1):
+        stage_name = stage.name
+        logger.info(f"[{i}/{len(pipeline)}] Running stage: {stage_name}")
+        
+        stage_start = time.time()
+        stage_success = stage.execute()
+        stage_end = time.time()
+        stage_duration = stage_end - stage_start
+        
+        stage_report = {
+            "name": stage_name,
+            "success": stage_success,
+            "duration_seconds": stage_duration,
+            "skipped": stage.skip
+        }
+        pipeline_report["stages"].append(stage_report)
+        
+        if not stage_success and not args.force:
+            logger.error(f"Pipeline failed at stage {i}: {stage_name}")
+            success = False
+            pipeline_report["success"] = False
+            pipeline_report["failed_stage"] = stage_name
+            break
+    
+    end_time = time.time()
+    duration = end_time - start_time
+    
+    # Complete the report
+    pipeline_report["end_time"] = datetime.now().isoformat()
+    pipeline_report["duration_seconds"] = duration
+    pipeline_report["success"] = success
+    
+    # Save the report
+    report_file = os.path.join(OUTPUT_DIR, f"pipeline_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(report_file, 'w') as f:
+        json.dump(pipeline_report, f, indent=2, default=str)
+    
+    if success:
+        logger.info(f"✅ Pipeline completed successfully in {duration:.2f} seconds")
+        logger.info(f"Report saved to {report_file}")
+    else:
+        logger.error(f"❌ Pipeline failed after {duration:.2f} seconds")
+        logger.error(f"Partial report saved to {report_file}")
+    
+    return 0 if success else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
